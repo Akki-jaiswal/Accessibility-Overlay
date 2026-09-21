@@ -1,7 +1,9 @@
 import sys
+import os
 import traceback
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWebEngineCore import QWebEngineProfile
 from PyQt6.QtCore import Qt, QUrl, QPoint
 
 try:
@@ -37,20 +39,17 @@ class AssistantOverlay(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(15, 0, 5, 0)
         
-        # Label to show it's draggable
         title_label = QLabel("AI Assistant (Click and drag this bar to move)")
         title_label.setStyleSheet("color: #666; font-family: sans-serif; font-size: 12px;")
         title_layout.addWidget(title_label)
         title_layout.addStretch()
 
-        # Minimize Button
         self.min_btn = QPushButton("—")
         self.min_btn.setFixedSize(30, 30)
         self.min_btn.setStyleSheet("QPushButton { border: none; font-weight: bold; color: #555; } QPushButton:hover { background-color: #ddd; }")
         self.min_btn.clicked.connect(self.showMinimized)
         title_layout.addWidget(self.min_btn)
 
-        # Close Button
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(30, 30)
         self.close_btn.setStyleSheet("QPushButton { border: none; font-weight: bold; color: #555; } QPushButton:hover { background-color: #ff4444; color: white; }")
@@ -60,9 +59,29 @@ class AssistantOverlay(QMainWindow):
         layout.addWidget(self.title_bar)
         # ------------------------------
 
+        # --- Persistent Web Session Logic ---
+        # Instead of the default profile (which sometimes ignores local folders), we create a named custom profile.
+        self.profile = QWebEngineProfile("GoogleAIProfile")
+        storage_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_data")
+        
+        # We must set BOTH Cache and Storage paths to force Chromium to write to the hard drive
+        self.profile.setCachePath(storage_path)
+        self.profile.setPersistentStoragePath(storage_path)
+        self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+        
+        # Firefox Disguise to bypass Google's bot detection
+        self.profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0")
+        # ------------------------------------
+
         # Web Browser
         try:
+            from PyQt6.QtWebEngineCore import QWebEnginePage
             self.browser = QWebEngineView()
+            
+            # Explicitly bind our custom profile to the page
+            page = QWebEnginePage(self.profile, self.browser)
+            self.browser.setPage(page)
+            
             self.browser.setUrl(QUrl("https://gemini.google.com/"))
             layout.addWidget(self.browser)
         except Exception as e:
@@ -70,7 +89,6 @@ class AssistantOverlay(QMainWindow):
 
     # --- Window Dragging Logic ---
     def mousePressEvent(self, event):
-        # Only allow dragging if they click the top title bar area (top 30 pixels)
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 30:
             self.oldPos = event.globalPosition().toPoint()
 
