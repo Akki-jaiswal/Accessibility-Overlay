@@ -6,3 +6,6 @@ __pycache__/
 env/
 venv/
 .env
+
+web_data/
+*.log
