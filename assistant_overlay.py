@@ -1,10 +1,9 @@
 import sys
 import traceback
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel
-from PyQt5.QtWebEngineWidgets import QWebEngineView
-from PyQt5.QtCore import Qt, QUrl
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtCore import Qt, QUrl
 
-# Try importing keyboard, but don't crash if it fails
 try:
     import keyboard
     KEYBOARD_AVAILABLE = True
@@ -19,11 +18,14 @@ class AssistantOverlay(QMainWindow):
         self.setup_hotkeys()
 
     def initUI(self):
-        # Sleek frameless design, always-on-top
-        self.setWindowFlags(Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
-        # Increased size for better visibility
+        # Sleek frameless design, always-on-top (PyQt6 syntax)
+        self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)
+        
+        # Massive 800x800 size
         self.setGeometry(100, 100, 800, 800)
-        self.setWindowOpacity(0.95)
+        
+        # Solid background to prevent transparency glitching
+        self.setStyleSheet("background-color: white;")
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -31,14 +33,13 @@ class AssistantOverlay(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Web Browser - Now pointing to an AI Assistant
+        # Web Browser
         try:
             self.browser = QWebEngineView()
             self.browser.setUrl(QUrl("https://gemini.google.com/"))
             layout.addWidget(self.browser)
         except Exception as e:
             print(f"Error initializing WebEngine: {e}")
-            layout.addWidget(QLabel("Failed to load WebBrowser. Check console."))
 
     def setup_hotkeys(self):
         if KEYBOARD_AVAILABLE:
@@ -57,7 +58,7 @@ class AssistantOverlay(QMainWindow):
 
     # Allow closing with Escape key
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == Qt.Key.Key_Escape:
             self.close()
 
 if __name__ == '__main__':
@@ -65,7 +66,7 @@ if __name__ == '__main__':
         app = QApplication(sys.argv)
         overlay = AssistantOverlay()
         overlay.show()
-        sys.exit(app.exec_())
+        sys.exit(app.exec())
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")
         traceback.print_exc()
