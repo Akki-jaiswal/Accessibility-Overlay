@@ -2,10 +2,12 @@ import sys
 import os
 import traceback
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
-from PyQt6.QtCore import Qt, QUrl, QPoint
+from PyQt6.QtCore import Qt, QUrl, QPoint, pyqtSignal
 from PyQt6.QtGui import QColor
 
 try:
@@ -15,13 +17,69 @@ except ImportError:
     KEYBOARD_AVAILABLE = False
     print("Warning: keyboard module not found. Global hotkeys disabled.")
 
+# Global reference for the local server to communicate with the GUI
+overlay_instance = None
+
+# --- LOCAL SERVER FOR CHROME EXTENSION ---
+class RequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == '/inject':
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            
+            try:
+                data = json.loads(post_data)
+                text = data.get('text', '')
+            except:
+                text = post_data
+            
+            # Send text safely to the main GUI thread
+            if text and overlay_instance:
+                overlay_instance.external_inject_signal.emit(text)
+            
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(b"Success")
+            
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        
+    def log_message(self, format, *args):
+        pass # Suppress terminal spam
+
+def start_server():
+    server = HTTPServer(('localhost', 65432), RequestHandler)
+    server.serve_forever()
+# -----------------------------------------
+
 class AssistantOverlay(QMainWindow):
+    toggle_signal = pyqtSignal()
+    ghost_signal = pyqtSignal()
+    external_inject_signal = pyqtSignal(str) # Listens for the Chrome Extension
+
     def __init__(self):
         super().__init__()
+        global overlay_instance
+        overlay_instance = self
+        
         self.oldPos = None
-        self.last_injected_text = "" # Tracks what was pasted so we don't double-paste
+        self.is_ghost_mode = False
+        
+        self.toggle_signal.connect(self.toggle_visibility)
+        self.ghost_signal.connect(self.toggle_ghost_mode)
+        self.external_inject_signal.connect(self.inject_external_text)
+
         self.initUI()
         self.setup_hotkeys()
+        
+        # Boot up the background listener for the Chrome Extension
+        self.server_thread = threading.Thread(target=start_server, daemon=True)
+        self.server_thread.start()
 
     def initUI(self):
         self.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)
@@ -54,6 +112,13 @@ class AssistantOverlay(QMainWindow):
 
         title_layout.addStretch()
 
+        self.ghost_btn = QPushButton("👻")
+        self.ghost_btn.setToolTip("Toggle Ghost Mode (Ctrl+G)")
+        self.ghost_btn.setFixedSize(30, 30)
+        self.ghost_btn.setStyleSheet("QPushButton { border: none; font-size: 16px; } QPushButton:hover { background-color: #334155; }")
+        self.ghost_btn.clicked.connect(self.toggle_ghost_mode)
+        title_layout.addWidget(self.ghost_btn)
+
         self.min_btn = QPushButton("—")
         self.min_btn.setFixedSize(30, 30)
         self.min_btn.setStyleSheet("QPushButton { border: none; font-weight: bold; color: #cbd5e1; font-size: 14px; } QPushButton:hover { background-color: #334155; color: white; }")
@@ -82,18 +147,8 @@ class AssistantOverlay(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.setStyleSheet("""
             QTabWidget::pane { border: none; }
-            QTabBar::tab { 
-                background: #1e293b; 
-                color: #94a3b8; 
-                padding: 8px 16px; 
-                border-right: 1px solid #0f172a; 
-            }
-            QTabBar::tab:selected { 
-                background: #0f172a; 
-                color: #f8fafc; 
-                font-weight: bold; 
-                border-top: 2px solid #3b82f6; 
-            }
+            QTabBar::tab { background: #1e293b; color: #94a3b8; padding: 8px 16px; border-right: 1px solid #0f172a; }
+            QTabBar::tab:selected { background: #0f172a; color: #f8fafc; font-weight: bold; border-top: 2px solid #3b82f6; }
             QTabBar::tab:hover:!selected { background: #334155; color: white; }
         """)
         layout.addWidget(self.tabs)
@@ -117,19 +172,33 @@ class AssistantOverlay(QMainWindow):
         else:
             self.tabs.removeTab(i)
 
-    # --- CORE FEATURE: Smart Clipboard Injection ---
-    def inject_clipboard_to_chat(self):
-        clipboard = QApplication.clipboard()
-        text = clipboard.text()
-        
-        # Don't inject if clipboard is empty or if we've already injected this exact text recently
-        if not text or text == self.last_injected_text:
-            return
-            
-        self.last_injected_text = text
+    def toggle_ghost_mode(self):
+        if not self.is_ghost_mode:
+            self.setWindowOpacity(0.5) 
+            self.is_ghost_mode = True
+            self.ghost_btn.setStyleSheet("QPushButton { border: none; font-size: 16px; background-color: #3b82f6; border-radius: 15px;} ")
+        else:
+            self.setWindowOpacity(1.0) 
+            self.is_ghost_mode = False
+            self.ghost_btn.setStyleSheet("QPushButton { border: none; font-size: 16px; } QPushButton:hover { background-color: #334155; }")
+
+    def toggle_visibility(self):
+        if self.isVisible() and self.isActiveWindow() and not self.isMinimized():
+            self.hide()
+        else:
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+
+    # --- INJECT TEXT FROM EXTENSION ---
+    def inject_external_text(self, text):
+        if not self.isVisible() or self.isMinimized() or not self.isActiveWindow():
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+
         safe_text = json.dumps(text + "\\n")
         
-        # This JavaScript safely finds the chat box and mimics a user pasting text into it
         js_code = f"""
         (function() {{
             let box = document.querySelector('rich-textarea div[contenteditable="true"]') || document.querySelector('textarea') || document.querySelector('div[contenteditable="true"]');
@@ -143,7 +212,7 @@ class AssistantOverlay(QMainWindow):
         current_widget = self.tabs.currentWidget()
         if isinstance(current_widget, QWebEngineView):
             current_widget.page().runJavaScript(js_code)
-    # -----------------------------------------------
+    # ----------------------------------
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 34:
@@ -161,19 +230,10 @@ class AssistantOverlay(QMainWindow):
     def setup_hotkeys(self):
         if KEYBOARD_AVAILABLE:
             try:
-                keyboard.add_hotkey('ctrl+space', self.toggle_visibility)
+                keyboard.add_hotkey('ctrl+space', lambda: self.toggle_signal.emit())
+                keyboard.add_hotkey('ctrl+g', lambda: self.ghost_signal.emit())
             except Exception as e:
-                print(f"Failed to bind hotkey: {e}")
-
-    def toggle_visibility(self):
-        if self.isVisible() and not self.isMinimized():
-            self.hide()
-        else:
-            self.showNormal()
-            self.activateWindow()
-            self.raise_()
-            # The magic trigger: Automatically pull from clipboard when overlay is summoned
-            self.inject_clipboard_to_chat()
+                print(f"Failed to bind hotkeys: {e}")
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:

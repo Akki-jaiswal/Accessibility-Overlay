@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "AI Overlay Connector",
+  "version": "1.0",
+  "description": "Seamlessly beams highlighted text from your browser directly to the Python AI Overlay.",
+  "permissions": ["activeTab", "scripting"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "send-selection": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+E",
+        "mac": "Command+Shift+E"
+      },
+      "description": "Send selected text to the AI Overlay"
+    }
+  }
+}
