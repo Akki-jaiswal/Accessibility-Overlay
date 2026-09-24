@@ -25,6 +25,13 @@ except ImportError:
     UIA_AVAILABLE = False
     print("Warning: uiautomation module not found. Desktop text reading disabled.")
 
+try:
+    import speech_recognition as sr
+    SPEECH_AVAILABLE = True
+except ImportError:
+    SPEECH_AVAILABLE = False
+    print("Warning: SpeechRecognition module not found. Voice dictation disabled.")
+
 overlay_instance = None
 
 # --- LOCAL SERVER FOR CHROME EXTENSION ---
@@ -68,6 +75,8 @@ class AssistantOverlay(QMainWindow):
     ghost_signal = pyqtSignal()
     external_inject_signal = pyqtSignal(str)
     desktop_grab_signal = pyqtSignal() 
+    dictation_signal = pyqtSignal() # New signal for voice dictation
+    reset_title_signal = pyqtSignal() # Safe UI reset from background threads
 
     def __init__(self):
         super().__init__()
@@ -81,6 +90,8 @@ class AssistantOverlay(QMainWindow):
         self.ghost_signal.connect(self.toggle_ghost_mode)
         self.external_inject_signal.connect(self.inject_external_text)
         self.desktop_grab_signal.connect(self.grab_desktop_text)
+        self.dictation_signal.connect(self.start_dictation)
+        self.reset_title_signal.connect(self.reset_title)
 
         self.initUI()
         self.setup_hotkeys()
@@ -105,9 +116,10 @@ class AssistantOverlay(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(10, 0, 5, 0)
         
-        title_label = QLabel("AI Assistant")
-        title_label.setStyleSheet("color: #cbd5e1; font-family: sans-serif; font-size: 13px; font-weight: bold;")
-        title_layout.addWidget(title_label)
+        # Kept as class attribute so we can change the text when recording
+        self.title_label = QLabel("AI Assistant")
+        self.title_label.setStyleSheet("color: #cbd5e1; font-family: sans-serif; font-size: 13px; font-weight: bold;")
+        title_layout.addWidget(self.title_label)
 
         self.new_tab_btn = QPushButton("+ New Tab")
         self.new_tab_btn.setStyleSheet("""
@@ -178,6 +190,48 @@ class AssistantOverlay(QMainWindow):
             self.close()
         else:
             self.tabs.removeTab(i)
+
+    # --- VOICE DICTATION LOGIC ---
+    def start_dictation(self):
+        if not SPEECH_AVAILABLE:
+            print("Speech modules missing. Run: pip install SpeechRecognition pyaudio")
+            return
+        
+        # Update UI to show we are recording
+        self.title_label.setText("AI Assistant 🔴 (Listening...)")
+        self.title_label.setStyleSheet("color: #ef4444; font-family: sans-serif; font-size: 13px; font-weight: bold;")
+        
+        # Start actual listening in a background thread so UI doesn't freeze
+        threading.Thread(target=self._process_dictation, daemon=True).start()
+
+    def _process_dictation(self):
+        recognizer = sr.Recognizer()
+        try:
+            with sr.Microphone() as source:
+                # Calibrate for background noise for a split second
+                recognizer.adjust_for_ambient_noise(source, duration=0.2)
+                audio = recognizer.listen(source, timeout=5, phrase_time_limit=15)
+                
+            # Transcribe using Google's free Web Speech API
+            text = recognizer.recognize_google(audio)
+            if text:
+                # Reuse our external inject signal to paste it safely into Gemini!
+                self.external_inject_signal.emit(text)
+                
+        except sr.WaitTimeoutError:
+            print("Voice dictation timed out (no speech detected).")
+        except sr.UnknownValueError:
+            print("Voice dictation could not understand the audio.")
+        except Exception as e:
+            print(f"Voice dictation error: {e}")
+        finally:
+            # Tell the main thread to reset the title bar
+            self.reset_title_signal.emit()
+
+    def reset_title(self):
+        self.title_label.setText("AI Assistant")
+        self.title_label.setStyleSheet("color: #cbd5e1; font-family: sans-serif; font-size: 13px; font-weight: bold;")
+    # -----------------------------
 
     def toggle_ghost_mode(self):
         if not self.is_ghost_mode:
@@ -258,6 +312,7 @@ class AssistantOverlay(QMainWindow):
                 keyboard.add_hotkey('ctrl+space', lambda: self.toggle_signal.emit())
                 keyboard.add_hotkey('ctrl+g', lambda: self.ghost_signal.emit())
                 keyboard.add_hotkey('ctrl+shift+d', lambda: self.desktop_grab_signal.emit())
+                keyboard.add_hotkey('ctrl+shift+v', lambda: self.dictation_signal.emit())
             except Exception as e:
                 print(f"Failed to bind hotkeys: {e}")
 
