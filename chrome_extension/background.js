@@ -1,3 +1,4 @@
+
 chrome.commands.onCommand.addListener((command) => {
   if (command === "send-selection") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {

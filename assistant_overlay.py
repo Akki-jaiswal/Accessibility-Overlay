@@ -4,7 +4,7 @@ import traceback
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget, QPlainTextEdit
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
 from PyQt6.QtCore import Qt, QUrl, QPoint, pyqtSignal
@@ -76,9 +76,6 @@ class AssistantOverlay(QMainWindow):
         
         self.oldPos = None
         self.is_ghost_mode = False
-        
-        # Define the path for our local Teleprompter save file
-        self.notepad_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_data", "teleprompter.txt")
         
         self.toggle_signal.connect(self.toggle_visibility)
         self.ghost_signal.connect(self.toggle_ghost_mode)
@@ -164,40 +161,6 @@ class AssistantOverlay(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.add_new_tab(QUrl("https://gemini.google.com/"), "Gemini AI")
-        
-        # --- ADD TELEPROMPTER TAB ---
-        self.add_notepad_tab()
-
-    def add_notepad_tab(self):
-        self.notepad_editor = QPlainTextEdit()
-        self.notepad_editor.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: #0f172a;
-                color: #f8fafc;
-                font-family: 'Segoe UI', Arial, sans-serif;
-                font-size: 16px;
-                border: none;
-                padding: 15px;
-            }
-        """)
-        
-        # Load existing notes if they exist
-        if os.path.exists(self.notepad_file):
-            with open(self.notepad_file, "r", encoding="utf-8") as f:
-                self.notepad_editor.setPlainText(f.read())
-                
-        # Connect to auto-save
-        self.notepad_editor.textChanged.connect(self.save_notepad)
-        
-        # Insert as the second tab
-        self.tabs.insertTab(1, self.notepad_editor, "📝 Teleprompter")
-
-    def save_notepad(self):
-        text = self.notepad_editor.toPlainText()
-        os.makedirs(os.path.dirname(self.notepad_file), exist_ok=True)
-        with open(self.notepad_file, "w", encoding="utf-8") as f:
-            f.write(text)
-    # ----------------------------
 
     def add_new_tab(self, url, label="Loading..."):
         browser = QWebEngineView()
@@ -211,10 +174,6 @@ class AssistantOverlay(QMainWindow):
         browser.titleChanged.connect(lambda title, browser=browser: self.tabs.setTabText(self.tabs.indexOf(browser), title[:15] + "..." if len(title) > 15 else title))
 
     def close_tab(self, i):
-        # Prevent the user from accidentally closing the Teleprompter tab!
-        if self.tabs.tabText(i) == "📝 Teleprompter":
-            return
-            
         if self.tabs.count() < 2:
             self.close()
         else:
