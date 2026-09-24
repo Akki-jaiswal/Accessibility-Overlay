@@ -4,7 +4,7 @@ import traceback
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget, QPlainTextEdit
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
 from PyQt6.QtCore import Qt, QUrl, QPoint, pyqtSignal
@@ -17,7 +17,14 @@ except ImportError:
     KEYBOARD_AVAILABLE = False
     print("Warning: keyboard module not found. Global hotkeys disabled.")
 
-# Global reference for the local server to communicate with the GUI
+try:
+    import uiautomation as auto
+    auto.SetGlobalSearchTimeout(0.5) 
+    UIA_AVAILABLE = True
+except ImportError:
+    UIA_AVAILABLE = False
+    print("Warning: uiautomation module not found. Desktop text reading disabled.")
+
 overlay_instance = None
 
 # --- LOCAL SERVER FOR CHROME EXTENSION ---
@@ -33,7 +40,6 @@ class RequestHandler(BaseHTTPRequestHandler):
             except:
                 text = post_data
             
-            # Send text safely to the main GUI thread
             if text and overlay_instance:
                 overlay_instance.external_inject_signal.emit(text)
             
@@ -50,7 +56,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         
     def log_message(self, format, *args):
-        pass # Suppress terminal spam
+        pass
 
 def start_server():
     server = HTTPServer(('localhost', 65432), RequestHandler)
@@ -60,7 +66,8 @@ def start_server():
 class AssistantOverlay(QMainWindow):
     toggle_signal = pyqtSignal()
     ghost_signal = pyqtSignal()
-    external_inject_signal = pyqtSignal(str) # Listens for the Chrome Extension
+    external_inject_signal = pyqtSignal(str)
+    desktop_grab_signal = pyqtSignal() 
 
     def __init__(self):
         super().__init__()
@@ -70,14 +77,17 @@ class AssistantOverlay(QMainWindow):
         self.oldPos = None
         self.is_ghost_mode = False
         
+        # Define the path for our local Teleprompter save file
+        self.notepad_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_data", "teleprompter.txt")
+        
         self.toggle_signal.connect(self.toggle_visibility)
         self.ghost_signal.connect(self.toggle_ghost_mode)
         self.external_inject_signal.connect(self.inject_external_text)
+        self.desktop_grab_signal.connect(self.grab_desktop_text)
 
         self.initUI()
         self.setup_hotkeys()
         
-        # Boot up the background listener for the Chrome Extension
         self.server_thread = threading.Thread(target=start_server, daemon=True)
         self.server_thread.start()
 
@@ -154,6 +164,40 @@ class AssistantOverlay(QMainWindow):
         layout.addWidget(self.tabs)
 
         self.add_new_tab(QUrl("https://gemini.google.com/"), "Gemini AI")
+        
+        # --- ADD TELEPROMPTER TAB ---
+        self.add_notepad_tab()
+
+    def add_notepad_tab(self):
+        self.notepad_editor = QPlainTextEdit()
+        self.notepad_editor.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #0f172a;
+                color: #f8fafc;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 16px;
+                border: none;
+                padding: 15px;
+            }
+        """)
+        
+        # Load existing notes if they exist
+        if os.path.exists(self.notepad_file):
+            with open(self.notepad_file, "r", encoding="utf-8") as f:
+                self.notepad_editor.setPlainText(f.read())
+                
+        # Connect to auto-save
+        self.notepad_editor.textChanged.connect(self.save_notepad)
+        
+        # Insert as the second tab
+        self.tabs.insertTab(1, self.notepad_editor, "📝 Teleprompter")
+
+    def save_notepad(self):
+        text = self.notepad_editor.toPlainText()
+        os.makedirs(os.path.dirname(self.notepad_file), exist_ok=True)
+        with open(self.notepad_file, "w", encoding="utf-8") as f:
+            f.write(text)
+    # ----------------------------
 
     def add_new_tab(self, url, label="Loading..."):
         browser = QWebEngineView()
@@ -167,6 +211,10 @@ class AssistantOverlay(QMainWindow):
         browser.titleChanged.connect(lambda title, browser=browser: self.tabs.setTabText(self.tabs.indexOf(browser), title[:15] + "..." if len(title) > 15 else title))
 
     def close_tab(self, i):
+        # Prevent the user from accidentally closing the Teleprompter tab!
+        if self.tabs.tabText(i) == "📝 Teleprompter":
+            return
+            
         if self.tabs.count() < 2:
             self.close()
         else:
@@ -190,7 +238,6 @@ class AssistantOverlay(QMainWindow):
             self.activateWindow()
             self.raise_()
 
-    # --- INJECT TEXT FROM EXTENSION ---
     def inject_external_text(self, text):
         if not self.isVisible() or self.isMinimized() or not self.isActiveWindow():
             self.showNormal()
@@ -212,7 +259,26 @@ class AssistantOverlay(QMainWindow):
         current_widget = self.tabs.currentWidget()
         if isinstance(current_widget, QWebEngineView):
             current_widget.page().runJavaScript(js_code)
-    # ----------------------------------
+
+    def grab_desktop_text(self):
+        if not UIA_AVAILABLE:
+            print("uiautomation not installed. Run: pip install uiautomation")
+            return
+
+        try:
+            control = auto.GetFocusedControl()
+            if control:
+                text_pattern = control.GetTextPattern()
+                if text_pattern:
+                    selections = text_pattern.GetSelection()
+                    if selections and len(selections) > 0:
+                        extracted_text = selections[0].GetText(-1)
+                        if extracted_text:
+                            self.inject_external_text(extracted_text)
+                            return
+            print("No accessible text selection found in the active window.")
+        except Exception as e:
+            print(f"Could not read desktop text: {e}")
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 34:
@@ -232,6 +298,7 @@ class AssistantOverlay(QMainWindow):
             try:
                 keyboard.add_hotkey('ctrl+space', lambda: self.toggle_signal.emit())
                 keyboard.add_hotkey('ctrl+g', lambda: self.ghost_signal.emit())
+                keyboard.add_hotkey('ctrl+shift+d', lambda: self.desktop_grab_signal.emit())
             except Exception as e:
                 print(f"Failed to bind hotkeys: {e}")
 
