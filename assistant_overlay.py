@@ -382,11 +382,20 @@ class AssistantOverlay(QMainWindow):
             print("Falling back to simulated copy for non-native UI...")
             try:
                 cb = QApplication.clipboard()
+                
+                # FIX: We must release the keys the user is currently holding (Ctrl+Shift+D), 
+                # otherwise Windows registers 'Ctrl+Shift+C' instead of 'Ctrl+C'
+                keyboard.release('ctrl')
+                keyboard.release('shift')
+                keyboard.release('d')
+                
+                import time
+                time.sleep(0.05) # Brief pause for OS to register key release
+                
                 # Simulate Ctrl+C to push highlighted text to clipboard
                 keyboard.send('ctrl+c')
                 
                 # Give Windows OS a fraction of a second to update the clipboard
-                import time
                 time.sleep(0.15)
                 
                 new_text = cb.text()
