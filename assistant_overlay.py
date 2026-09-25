@@ -3,8 +3,9 @@ import os
 import traceback
 import json
 import threading
+import ctypes
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget, QDialog
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
 from PyQt6.QtCore import Qt, QUrl, QPoint, pyqtSignal
@@ -33,6 +34,7 @@ except ImportError:
     print("Warning: SpeechRecognition module not found. Voice dictation disabled.")
 
 overlay_instance = None
+
 
 # --- LOCAL SERVER FOR CHROME EXTENSION ---
 class RequestHandler(BaseHTTPRequestHandler):
@@ -70,13 +72,54 @@ def start_server():
     server.serve_forever()
 # -----------------------------------------
 
+
+# --- SAFETY CONFIRMATION DIALOG (For 2-Way Automation) ---
+class SafetyConfirmDialog(QDialog):
+    def __init__(self, action_text, parent=None):
+        super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setStyleSheet("background-color: #7f1d1d; color: white; border: 2px solid #ef4444; border-radius: 8px;")
+        
+        # Position slightly offset from the main window
+        if parent:
+            self.setGeometry(parent.x() + 50, parent.y() + 50, 400, 120)
+        else:
+            self.setGeometry(100, 100, 400, 120)
+        
+        layout = QVBoxLayout(self)
+        
+        lbl_title = QLabel("⚠️ HUMAN APPROVAL REQUIRED")
+        lbl_title.setStyleSheet("font-weight: bold; font-size: 14px; color: #fca5a5;")
+        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_title)
+        
+        lbl_action = QLabel(f"Target Action: {action_text}")
+        lbl_action.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_action.setWordWrap(True)
+        lbl_action.setStyleSheet("font-size: 12px; margin: 10px 0;")
+        layout.addWidget(lbl_action)
+        
+        lbl_inst = QLabel("Press ENTER to Allow   |   Press ESC to Block")
+        lbl_inst.setStyleSheet("font-size: 11px; color: #fecaca; font-weight: bold;")
+        lbl_inst.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_inst)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Return or event.key() == Qt.Key.Key_Enter:
+            self.accept()
+        elif event.key() == Qt.Key.Key_Escape:
+            self.reject()
+# ---------------------------------------------------------
+
+
 class AssistantOverlay(QMainWindow):
     toggle_signal = pyqtSignal()
     ghost_signal = pyqtSignal()
     external_inject_signal = pyqtSignal(str)
     desktop_grab_signal = pyqtSignal() 
-    dictation_signal = pyqtSignal() # New signal for voice dictation
-    reset_title_signal = pyqtSignal() # Safe UI reset from background threads
+    dictation_signal = pyqtSignal()
+    reset_title_signal = pyqtSignal() 
+    test_safety_signal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -85,6 +128,7 @@ class AssistantOverlay(QMainWindow):
         
         self.oldPos = None
         self.is_ghost_mode = False
+        self.is_listening = False 
         
         self.toggle_signal.connect(self.toggle_visibility)
         self.ghost_signal.connect(self.toggle_ghost_mode)
@@ -92,6 +136,7 @@ class AssistantOverlay(QMainWindow):
         self.desktop_grab_signal.connect(self.grab_desktop_text)
         self.dictation_signal.connect(self.start_dictation)
         self.reset_title_signal.connect(self.reset_title)
+        self.test_safety_signal.connect(self.trigger_safety_test)
 
         self.initUI()
         self.setup_hotkeys()
@@ -116,7 +161,6 @@ class AssistantOverlay(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(10, 0, 5, 0)
         
-        # Kept as class attribute so we can change the text when recording
         self.title_label = QLabel("AI Assistant")
         self.title_label.setStyleSheet("color: #cbd5e1; font-family: sans-serif; font-size: 13px; font-weight: bold;")
         title_layout.addWidget(self.title_label)
@@ -153,7 +197,12 @@ class AssistantOverlay(QMainWindow):
         layout.addWidget(self.title_bar)
 
         self.profile = QWebEngineProfile("GoogleAIProfile")
-        storage_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web_data")
+        if getattr(sys, 'frozen', False):
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            
+        storage_path = os.path.join(base_dir, "web_data")
         self.profile.setCachePath(storage_path)
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
@@ -191,47 +240,46 @@ class AssistantOverlay(QMainWindow):
         else:
             self.tabs.removeTab(i)
 
-    # --- VOICE DICTATION LOGIC ---
     def start_dictation(self):
         if not SPEECH_AVAILABLE:
             print("Speech modules missing. Run: pip install SpeechRecognition pyaudio")
             return
+            
+        if self.is_listening:
+            return
+        self.is_listening = True
         
-        # Update UI to show we are recording
         self.title_label.setText("AI Assistant 🔴 (Listening...)")
         self.title_label.setStyleSheet("color: #ef4444; font-family: sans-serif; font-size: 13px; font-weight: bold;")
         
-        # Start actual listening in a background thread so UI doesn't freeze
         threading.Thread(target=self._process_dictation, daemon=True).start()
 
     def _process_dictation(self):
-        recognizer = sr.Recognizer()
         try:
+            recognizer = sr.Recognizer()
             with sr.Microphone() as source:
-                # Calibrate for background noise for a split second
                 recognizer.adjust_for_ambient_noise(source, duration=0.2)
                 audio = recognizer.listen(source, timeout=5, phrase_time_limit=15)
                 
-            # Transcribe using Google's free Web Speech API
             text = recognizer.recognize_google(audio)
             if text:
-                # Reuse our external inject signal to paste it safely into Gemini!
                 self.external_inject_signal.emit(text)
                 
         except sr.WaitTimeoutError:
-            print("Voice dictation timed out (no speech detected).")
+            print("Voice dictation timed out.")
         except sr.UnknownValueError:
             print("Voice dictation could not understand the audio.")
+        except AttributeError:
+            print("Microphone block: The audio stream failed to open properly.")
         except Exception as e:
             print(f"Voice dictation error: {e}")
         finally:
-            # Tell the main thread to reset the title bar
+            self.is_listening = False
             self.reset_title_signal.emit()
 
     def reset_title(self):
         self.title_label.setText("AI Assistant")
         self.title_label.setStyleSheet("color: #cbd5e1; font-family: sans-serif; font-size: 13px; font-weight: bold;")
-    # -----------------------------
 
     def toggle_ghost_mode(self):
         if not self.is_ghost_mode:
@@ -273,9 +321,29 @@ class AssistantOverlay(QMainWindow):
         if isinstance(current_widget, QWebEngineView):
             current_widget.page().runJavaScript(js_code)
 
+    def get_active_window_title(self):
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+            buf = ctypes.create_unicode_buffer(length + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, length + 1)
+            return buf.value.lower()
+        except:
+            return ""
+
     def grab_desktop_text(self):
         if not UIA_AVAILABLE:
-            print("uiautomation not installed. Run: pip install uiautomation")
+            return
+
+        window_title = self.get_active_window_title()
+
+        # TASK 1: PRIVACY DENY-LIST
+        deny_list = ["1password", "bitwarden", "keepass", "lastpass", "dashlane", "bank", "vault"]
+        if any(bad_word in window_title for bad_word in deny_list):
+            print(f"PRIVACY SHIELD: Blocked text extraction from secure app ({window_title})")
+            self.title_label.setText(f"⚠️ Blocked (Privacy Shield): {window_title[:15]}...")
+            self.title_label.setStyleSheet("color: #fbbf24; font-weight: bold;")
+            threading.Timer(3.0, lambda: self.reset_title_signal.emit()).start()
             return
 
         try:
@@ -287,11 +355,33 @@ class AssistantOverlay(QMainWindow):
                     if selections and len(selections) > 0:
                         extracted_text = selections[0].GetText(-1)
                         if extracted_text:
-                            self.inject_external_text(extracted_text)
+                            
+                            # TASK 2: APP-AWARE ROUTING
+                            routed_text = extracted_text
+                            if "code" in window_title or "pycharm" in window_title or "intellij" in window_title:
+                                routed_text = f"I am currently coding in my IDE. Please review or explain this snippet:\n\n{extracted_text}"
+                            elif "outlook" in window_title or "mail" in window_title or "gmail" in window_title:
+                                routed_text = f"Please draft a professional response to this email:\n\n{extracted_text}"
+                            elif "word" in window_title or "notepad" in window_title:
+                                routed_text = f"Please review, format, or continue this text:\n\n{extracted_text}"
+
+                            self.inject_external_text(routed_text)
                             return
             print("No accessible text selection found in the active window.")
         except Exception as e:
             print(f"Could not read desktop text: {e}")
+
+    # TASK 3: HUMAN-IN-THE-LOOP FRAMEWORK (For Future 2-Way Automation)
+    def trigger_safety_test(self):
+        dialog = SafetyConfirmDialog("Type generated AI code into active window", self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.title_label.setText("Action Approved! (2-way execution would happen here)")
+            self.title_label.setStyleSheet("color: #4ade80; font-weight: bold;")
+        else:
+            self.title_label.setText("Action Blocked by Human!")
+            self.title_label.setStyleSheet("color: #ef4444; font-weight: bold;")
+        
+        threading.Timer(3.0, lambda: self.reset_title_signal.emit()).start()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 34:
@@ -313,6 +403,9 @@ class AssistantOverlay(QMainWindow):
                 keyboard.add_hotkey('ctrl+g', lambda: self.ghost_signal.emit())
                 keyboard.add_hotkey('ctrl+shift+d', lambda: self.desktop_grab_signal.emit())
                 keyboard.add_hotkey('ctrl+shift+v', lambda: self.dictation_signal.emit())
+                
+                # New hotkey specifically for testing the safety framework before we build 2-way automation
+                keyboard.add_hotkey('ctrl+shift+h', lambda: self.test_safety_signal.emit())
             except Exception as e:
                 print(f"Failed to bind hotkeys: {e}")
 
