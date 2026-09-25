@@ -9,11 +9,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 # --- BYPASS GOOGLE SECURE BROWSER CHECK ---
 os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-blink-features=AutomationControlled"
 
-from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget, QDialog
+from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget, QDialog, QRubberBand
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
-from PyQt6.QtCore import Qt, QUrl, QPoint, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings, QWebEngineScript
+from PyQt6.QtCore import Qt, QUrl, QPoint, pyqtSignal, QRect, QSize
+from PyQt6.QtGui import QColor, QPainter, QPixmap, QGuiApplication
 
 try:
     import keyboard
@@ -38,6 +38,45 @@ except ImportError:
     print("Warning: SpeechRecognition module not found. Voice dictation disabled.")
 
 overlay_instance = None
+
+
+# --- CUSTOM SNIPPING TOOL ---
+class SnippingWidget(QWidget):
+    snippet_taken = pyqtSignal(QPixmap)
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.ToolTip)
+        self.setWindowState(Qt.WindowState.WindowFullScreen)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        
+        # Grab the entire physical screen
+        screen = QGuiApplication.primaryScreen()
+        self.original_image = screen.grabWindow(0)
+        
+        self.rubberBand = QRubberBand(QRubberBand.Shape.Rectangle, self)
+        self.origin = QPoint()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.drawPixmap(self.rect(), self.original_image)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 100)) # Dimming effect
+        
+    def mousePressEvent(self, event):
+        self.origin = event.pos()
+        self.rubberBand.setGeometry(QRect(self.origin, QSize()))
+        self.rubberBand.show()
+        
+    def mouseMoveEvent(self, event):
+        self.rubberBand.setGeometry(QRect(self.origin, event.pos()).normalized())
+        
+    def mouseReleaseEvent(self, event):
+        self.rubberBand.hide()
+        rect = QRect(self.origin, event.pos()).normalized()
+        cropped = self.original_image.copy(rect)
+        self.snippet_taken.emit(cropped)
+        self.close()
+# ----------------------------
 
 
 # --- LOCAL SERVER FOR CHROME EXTENSION ---
@@ -124,6 +163,7 @@ class AssistantOverlay(QMainWindow):
     dictation_signal = pyqtSignal()
     reset_title_signal = pyqtSignal() 
     test_safety_signal = pyqtSignal()
+    snipping_signal = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -141,6 +181,7 @@ class AssistantOverlay(QMainWindow):
         self.dictation_signal.connect(self.start_dictation)
         self.reset_title_signal.connect(self.reset_title)
         self.test_safety_signal.connect(self.trigger_safety_test)
+        self.snipping_signal.connect(self.start_snipping)
 
         self.initUI()
         self.setup_hotkeys()
@@ -419,7 +460,33 @@ class AssistantOverlay(QMainWindow):
         else:
             print("No text could be extracted.")
 
-    # TASK 3: HUMAN-IN-THE-LOOP FRAMEWORK (For Future 2-Way Automation)
+    def start_snipping(self):
+        # Hide the main window if it's up so it doesn't block the screen capture
+        if self.isVisible():
+            self.hide()
+            import time
+            time.sleep(0.2) # Give Windows OS a moment to visually hide the window
+            
+        self.snipper = SnippingWidget()
+        self.snipper.snippet_taken.connect(self.process_snippet)
+        self.snipper.show()
+
+    def process_snippet(self, pixmap):
+        # 1. Put the cropped image directly into the Windows Clipboard
+        QApplication.clipboard().setPixmap(pixmap)
+        
+        # 2. Bring the AI Assistant back to the front
+        self.showNormal()
+        self.activateWindow()
+        self.raise_()
+        
+        # 3. Automatically simulate a 'Ctrl+V' paste event into the Gemini chat box
+        def paste_image():
+            import time
+            time.sleep(0.5) # Wait for Gemini Web UI to gain focus
+            keyboard.send('ctrl+v')
+            
+        threading.Thread(target=paste_image, daemon=True).start()
     def trigger_safety_test(self):
         dialog = SafetyConfirmDialog("Type generated AI code into active window", self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -454,6 +521,9 @@ class AssistantOverlay(QMainWindow):
                 
                 # New hotkey specifically for testing the safety framework before we build 2-way automation
                 keyboard.add_hotkey('ctrl+shift+h', lambda: self.test_safety_signal.emit())
+                
+                # Hybrid Snipping Tool hotkey
+                keyboard.add_hotkey('ctrl+shift+s', lambda: self.snipping_signal.emit())
             except Exception as e:
                 print(f"Failed to bind hotkeys: {e}")
 

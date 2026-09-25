@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Strict Lockdown Portal</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 0; 
+            background-color: #0f172a; 
+            color: white; 
+            user-select: none; /* Prevents simple highlighting */
+        }
+        #landing, #exam, #violation { 
+            display: none; 
+            height: 100vh; 
+            width: 100vw; 
+            flex-direction: column; 
+            justify-content: center; 
+            align-items: center; 
+            text-align: center; 
+        }
+        #landing { display: flex; }
+        .btn { 
+            padding: 15px 30px; 
+            font-size: 18px; 
+            background: #3b82f6; 
+            color: white; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer; 
+            font-weight: bold; 
+        }
+        .btn:hover { background: #2563eb; }
+        .exam-content { 
+            background: white; 
+            color: black; 
+            padding: 40px; 
+            border-radius: 8px; 
+            width: 80%; 
+            max-width: 800px; 
+            text-align: left; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+        #violation { background-color: #7f1d1d; }
+        .warning { color: #fca5a5; font-size: 1.2em; margin-bottom: 30px; max-width: 600px; }
+    </style>
+</head>
+<body>
+
+    <!-- LANDING PAGE -->
+    <div id="landing">
+        <h1>🔒 Secure Environment Initialization</h1>
+        <p style="max-width: 600px; margin-bottom: 30px; line-height: 1.6;">
+            This page utilizes a strict Lockdown Mode. The content is <strong>only accessible in Full-Screen</strong>. 
+            If you attempt to press Esc, open another tab, press Alt+Tab, or access any other application on your device, 
+            the environment will instantly detect the loss of focus and lock you out.
+        </p>
+        <button class="btn" id="startBtn">Enter Strict Full-Screen Mode</button>
+    </div>
+
+    <!-- EXAM PAGE -->
+    <div id="exam">
+        <div class="exam-content">
+            <h2 style="margin-top: 0; color: #ef4444;">Question 1: Secure Browser Constraints</h2>
+            <p style="font-size: 16px; line-height: 1.5;">
+                In the context of proctored environments, explain how JavaScript event listeners 
+                (such as <code>blur</code> and <code>fullscreenchange</code>) are utilized to prevent users from interacting 
+                with external AI overlays or desktop applications.
+            </p>
+            <textarea rows="8" style="width: 100%; margin-top: 15px; padding: 10px; font-size: 14px;" placeholder="Type your answer here..."></textarea>
+            
+            <div style="margin-top: 20px; text-align: right;">
+                <button class="btn" style="background: #10b981; font-size: 14px;" onclick="document.exitFullscreen()">Submit Answer & Exit</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- VIOLATION PAGE -->
+    <div id="violation">
+        <h1 style="font-size: 48px; margin-bottom: 10px;">🚨 SECURITY VIOLATION 🚨</h1>
+        <p class="warning">
+            You have left the full-screen secure environment or switched your focus to another application/tab.
+            <br><br>
+            Content access is strictly prohibited outside of full-screen mode. You must close other applications to continue.
+        </p>
+        <button class="btn" id="resumeBtn">Return to Full-Screen Mode</button>
+    </div>
+
+    <script>
+        const landing = document.getElementById('landing');
+        const exam = document.getElementById('exam');
+        const violation = document.getElementById('violation');
+        let isSecureMode = false;
+
+        function showScreen(screen) {
+            landing.style.display = 'none';
+            exam.style.display = 'none';
+            violation.style.display = 'none';
+            screen.style.display = 'flex';
+        }
+
+        document.getElementById('startBtn').addEventListener('click', () => {
+            document.documentElement.requestFullscreen().then(() => {
+                isSecureMode = true;
+                showScreen(exam);
+            }).catch(err => alert(`Error: ${err.message}`));
+        });
+
+        document.getElementById('resumeBtn').addEventListener('click', () => {
+            document.documentElement.requestFullscreen().then(() => {
+                isSecureMode = true;
+                showScreen(exam);
+            }).catch(err => alert(`Error: ${err.message}`));
+        });
+
+        // 1. Detect if user presses Esc or F11 to leave full screen
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement && isSecureMode) {
+                isSecureMode = false;
+                showScreen(violation);
+            }
+        });
+
+        // 2. Detect if user clicks another app, uses Alt+Tab, or opens the Assistant Overlay
+        window.addEventListener('blur', () => {
+            if (isSecureMode) {
+                // If they lose focus, force them out of fullscreen and show violation
+                if (document.fullscreenElement) {
+                    document.exitFullscreen();
+                }
+                isSecureMode = false;
+                showScreen(violation);
+            }
+        });
+
+        // 3. Aggressive Copy/Paste Blocks
+        document.addEventListener('copy', e => { e.preventDefault(); alert('SECURITY ALERT: Copy disabled'); });
+        document.addEventListener('paste', e => { e.preventDefault(); alert('SECURITY ALERT: Paste disabled'); });
+        document.addEventListener('contextmenu', e => e.preventDefault()); // Block right click
+        
+        document.addEventListener('keydown', e => {
+            if (e.ctrlKey && (e.key === 'c' || e.key === 'v' || e.key === 'C' || e.key === 'V')) {
+                e.preventDefault();
+                alert('SECURITY ALERT: Ctrl shortcuts disabled');
+            }
+        });
+    </script>
+</body>
+</html>
