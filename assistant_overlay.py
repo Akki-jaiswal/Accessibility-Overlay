@@ -5,6 +5,10 @@ import json
 import threading
 import ctypes
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# --- BYPASS GOOGLE SECURE BROWSER CHECK ---
+os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-blink-features=AutomationControlled"
+
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, QPushButton, QLabel, QTabWidget, QDialog
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineProfile, QWebEnginePage, QWebEngineSettings
@@ -206,8 +210,23 @@ class AssistantOverlay(QMainWindow):
         self.profile.setCachePath(storage_path)
         self.profile.setPersistentStoragePath(storage_path)
         self.profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
-        self.profile.setHttpUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0")
+        
+        # MAC SAFARI SPOOF: Google's security checks are highly optimized to catch fake Chrome/Windows 
+        # User-Agents on QtWebEngine. Spoofing Mac Safari often completely bypasses the Chromium fingerprinting.
+        self.profile.setHttpUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Safari/605.1.15")
         self.profile.settings().setAttribute(QWebEngineSettings.WebAttribute.ForceDarkMode, True)
+
+        # JS INJECTION: Google checks for 'navigator.webdriver' to detect automated embedded browsers.
+        # We inject a script before the page even loads to delete these flags from the Javascript environment.
+        from PyQt6.QtWebEngineCore import QWebEngineScript
+        anti_bot_script = QWebEngineScript()
+        anti_bot_script.setInjectionPoint(QWebEngineScript.InjectionPoint.DocumentCreation)
+        anti_bot_script.setSourceCode("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.chrome = {runtime: {}};
+        """)
+        anti_bot_script.setWorldId(QWebEngineScript.ScriptWorldId.MainWorld)
+        self.profile.scripts().insert(anti_bot_script)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -332,9 +351,6 @@ class AssistantOverlay(QMainWindow):
             return ""
 
     def grab_desktop_text(self):
-        if not UIA_AVAILABLE:
-            return
-
         window_title = self.get_active_window_title()
 
         # TASK 1: PRIVACY DENY-LIST
@@ -346,30 +362,53 @@ class AssistantOverlay(QMainWindow):
             threading.Timer(3.0, lambda: self.reset_title_signal.emit()).start()
             return
 
-        try:
-            control = auto.GetFocusedControl()
-            if control:
-                text_pattern = control.GetTextPattern()
-                if text_pattern:
-                    selections = text_pattern.GetSelection()
-                    if selections and len(selections) > 0:
-                        extracted_text = selections[0].GetText(-1)
-                        if extracted_text:
-                            
-                            # TASK 2: APP-AWARE ROUTING
-                            routed_text = extracted_text
-                            if "code" in window_title or "pycharm" in window_title or "intellij" in window_title:
-                                routed_text = f"I am currently coding in my IDE. Please review or explain this snippet:\n\n{extracted_text}"
-                            elif "outlook" in window_title or "mail" in window_title or "gmail" in window_title:
-                                routed_text = f"Please draft a professional response to this email:\n\n{extracted_text}"
-                            elif "word" in window_title or "notepad" in window_title:
-                                routed_text = f"Please review, format, or continue this text:\n\n{extracted_text}"
+        extracted_text = ""
 
-                            self.inject_external_text(routed_text)
-                            return
-            print("No accessible text selection found in the active window.")
-        except Exception as e:
-            print(f"Could not read desktop text: {e}")
+        # STRATEGY 1: Try UIA First (Silent, preserves clipboard)
+        if UIA_AVAILABLE:
+            try:
+                control = auto.GetFocusedControl()
+                if control:
+                    text_pattern = control.GetTextPattern()
+                    if text_pattern:
+                        selections = text_pattern.GetSelection()
+                        if selections and len(selections) > 0:
+                            extracted_text = selections[0].GetText(-1)
+            except Exception as e:
+                print(f"UIA native text read failed: {e}")
+
+        # STRATEGY 2: Fallback to simulated Copy for Electron Apps (VS Code)
+        if not extracted_text and KEYBOARD_AVAILABLE:
+            print("Falling back to simulated copy for non-native UI...")
+            try:
+                cb = QApplication.clipboard()
+                # Simulate Ctrl+C to push highlighted text to clipboard
+                keyboard.send('ctrl+c')
+                
+                # Give Windows OS a fraction of a second to update the clipboard
+                import time
+                time.sleep(0.15)
+                
+                new_text = cb.text()
+                if new_text:
+                    extracted_text = new_text
+            except Exception as e:
+                print(f"Clipboard fallback failed: {e}")
+
+        # ROUTING & INJECTION
+        if extracted_text:
+            # TASK 2: APP-AWARE ROUTING
+            routed_text = extracted_text
+            if "code" in window_title or "pycharm" in window_title or "intellij" in window_title:
+                routed_text = f"I am currently coding in my IDE. Please review or explain this snippet:\\n\\n{extracted_text}"
+            elif "outlook" in window_title or "mail" in window_title or "gmail" in window_title:
+                routed_text = f"Please draft a professional response to this email:\\n\\n{extracted_text}"
+            elif "word" in window_title or "notepad" in window_title:
+                routed_text = f"Please review, format, or continue this text:\\n\\n{extracted_text}"
+
+            self.inject_external_text(routed_text)
+        else:
+            print("No text could be extracted.")
 
     # TASK 3: HUMAN-IN-THE-LOOP FRAMEWORK (For Future 2-Way Automation)
     def trigger_safety_test(self):
