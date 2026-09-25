@@ -324,7 +324,7 @@ class AssistantOverlay(QMainWindow):
             self.activateWindow()
             self.raise_()
 
-        safe_text = json.dumps(text + "\\n")
+        safe_text = json.dumps(text + "\n")
         
         js_code = f"""
         (function() {{
@@ -409,11 +409,11 @@ class AssistantOverlay(QMainWindow):
             # TASK 2: APP-AWARE ROUTING
             routed_text = extracted_text
             if "code" in window_title or "pycharm" in window_title or "intellij" in window_title:
-                routed_text = f"I am currently coding in my IDE. Please review or explain this snippet:\\n\\n{extracted_text}"
+                routed_text = f"I am currently coding in my IDE. Please review or explain this snippet:\n\n{extracted_text}"
             elif "outlook" in window_title or "mail" in window_title or "gmail" in window_title:
-                routed_text = f"Please draft a professional response to this email:\\n\\n{extracted_text}"
+                routed_text = f"Please draft a professional response to this email:\n\n{extracted_text}"
             elif "word" in window_title or "notepad" in window_title:
-                routed_text = f"Please review, format, or continue this text:\\n\\n{extracted_text}"
+                routed_text = f"Please review, format, or continue this text:\n\n{extracted_text}"
 
             self.inject_external_text(routed_text)
         else:
