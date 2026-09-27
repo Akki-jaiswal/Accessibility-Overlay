@@ -420,23 +420,27 @@ class MessageBubble(QFrame):
             if self.is_user:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: rgba(51, 65, 85, 0.65);
-                        border: 1px solid rgba(100, 116, 139, 0.45);
-                        border-radius: 9px;
+                        background-color: rgba(30, 41, 59, 0.85);
+                        border: 1px solid rgba(71, 85, 105, 0.60);
+                        border-radius: 10px;
                         margin-left: 48px;
                         margin-right: 2px;
                         margin-top: 2px;
                         margin-bottom: 2px;
-                        padding: 3px 6px;
+                        padding: 5px 9px;
                     }
                 """)
             else:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: transparent;
-                        border: none;
-                        margin: 0px;
-                        padding: 0px;
+                        background-color: rgba(10, 15, 29, 0.82);
+                        border: 1px solid rgba(51, 65, 85, 0.50);
+                        border-radius: 10px;
+                        margin-left: 2px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                        padding: 6px 10px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -455,28 +459,32 @@ class MessageBubble(QFrame):
                     QFrame {
                         background-color: #1e293b;
                         border: 1px solid #334155;
-                        border-radius: 9px;
+                        border-radius: 10px;
                         margin-left: 48px;
                         margin-right: 2px;
                         margin-top: 2px;
                         margin-bottom: 2px;
-                        padding: 3px 6px;
+                        padding: 5px 9px;
                     }
                 """)
             else:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: transparent;
-                        border: none;
-                        margin: 0px;
-                        padding: 0px;
+                        background-color: #0b1329;
+                        border: 1px solid #1e293b;
+                        border-radius: 10px;
+                        margin-left: 2px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                        padding: 6px 10px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
                 QTextBrowser {
                     background: transparent;
                     border: none;
-                    color: #f1f5f9;
+                    color: #f8fafc;
                     font-size: 13px;
                     font-family: 'Segoe UI', -apple-system, sans-serif;
                 }
@@ -506,10 +514,10 @@ class MessageBubble(QFrame):
         else:
             html = f"<p>{clean_text}</p>"
         
-        text_color = "#ffffff" if is_transparent else "#f1f5f9"
-        code_bg = "rgba(15, 23, 42, 0.60)" if is_transparent else "#0b1120"
-        pre_bg = "rgba(15, 23, 42, 0.70)" if is_transparent else "#0b1120"
-        pre_border = "1px solid rgba(51, 65, 85, 0.40)" if is_transparent else "1px solid #1e293b"
+        text_color = "#ffffff" if is_transparent else "#f8fafc"
+        code_bg = "rgba(0, 0, 0, 0.65)" if is_transparent else "#030712"
+        pre_bg = "rgba(0, 0, 0, 0.75)" if is_transparent else "#030712"
+        pre_border = "1px solid rgba(51, 65, 85, 0.50)" if is_transparent else "1px solid #1e293b"
 
         styled_html = f"""
         <style>
@@ -519,8 +527,8 @@ class MessageBubble(QFrame):
             h1, h2, h3, h4 {{ color: #ffffff; margin: 4px 0 2px 0; font-size: 13.5px; font-weight: bold; }}
             ul, ol {{ margin: 0 0 4px 14px; padding: 0; }}
             li {{ margin-bottom: 2px; }}
-            code {{ background-color: {code_bg}; color: #7dd3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
-            pre {{ background-color: {pre_bg}; padding: 5px; border-radius: 5px; border: {pre_border}; margin: 3px 0; white-space: pre-wrap; word-wrap: break-word; }}
+            code {{ background-color: {code_bg}; color: #7dd3fc; padding: 1px 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
+            pre {{ background-color: {pre_bg}; padding: 6px; border-radius: 6px; border: {pre_border}; margin: 4px 0; white-space: pre-wrap; word-wrap: break-word; }}
         </style>
         {html}
         """
