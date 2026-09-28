@@ -19,7 +19,8 @@ if %errorlevel% neq 0 (
 
 :: Install dependencies silently
 echo Checking and installing required libraries (this takes a few seconds)...
-pip install PyQt6 PyQt6-WebEngine keyboard uiautomation SpeechRecognition pyaudio --quiet
+pip install PyQt6 google-generativeai pillow keyboard uiautomation SpeechRecognition pyaudio --quiet
 
-:: Boot the app using pythonw (no black terminal window)
-start "" pythonw assistant_overlay.py
+:: Boot the Native app using pythonw (no black terminal window)
+start "" pythonw native_assistant.py
+
