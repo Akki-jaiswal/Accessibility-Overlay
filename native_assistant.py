@@ -749,17 +749,12 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            if self.is_click_through:
-                bg_alpha = 0
-            else:
-                bg_alpha = 8
-
-            self.main_container.setStyleSheet(f"""
-                QWidget#MainContainer {{
-                    background-color: rgba(15, 23, 42, {bg_alpha});
+            self.main_container.setStyleSheet("""
+                QWidget#MainContainer {
+                    background-color: transparent;
                     border: none;
                     border-radius: 14px;
-                }}
+                }
             """)
         else:
             self.main_container.setStyleSheet("""
@@ -865,7 +860,6 @@ class NativeAssistant(QMainWindow):
                     if widget.text_browser.viewport():
                         widget.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         
-        self.apply_container_style()
         self.main_container.update()
         self.update()
 
