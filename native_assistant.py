@@ -6,7 +6,7 @@ import threading
 import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLineEdit, QPushButton, QLabel, QScrollArea, QFrame,
+    QLineEdit, QPushButton, QLabel, QScrollArea, QFrame, QTextBrowser,
     QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect, QInputDialog
 )
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice
@@ -69,8 +69,12 @@ class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, is_image=False, pixmap=None, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.raw_text = text
+        self.is_user = is_user
+        
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(4)
 
         sender_label = QLabel("You" if is_user else "Gemini AI")
         sender_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #94a3b8;")
@@ -78,14 +82,17 @@ class MessageBubble(QFrame):
 
         if is_image and pixmap:
             img_label = QLabel()
-            scaled_pixmap = pixmap.scaledToWidth(280, Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaledToWidth(260, Qt.TransformationMode.SmoothTransformation)
             img_label.setPixmap(scaled_pixmap)
             img_label.setStyleSheet("border-radius: 6px; margin-top: 4px;")
             layout.addWidget(img_label)
 
-        self.content_label = QLabel(text)
-        self.content_label.setWordWrap(True)
-        self.content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Rich Markdown Text Browser
+        self.text_browser = QTextBrowser()
+        self.text_browser.setOpenExternalLinks(True)
+        self.text_browser.setReadOnly(True)
+        self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
         if is_user:
             self.setStyleSheet("""
@@ -93,12 +100,20 @@ class MessageBubble(QFrame):
                     background-color: #1e3a8a;
                     border: 1px solid #2563eb;
                     border-radius: 12px;
-                    margin-left: 40px;
+                    margin-left: 35px;
                     margin-right: 4px;
-                    margin-top: 4px;
-                    margin-bottom: 4px;
+                    margin-top: 3px;
+                    margin-bottom: 3px;
                 }
-                QLabel { color: #f8fafc; font-size: 13px; font-family: 'Segoe UI', sans-serif; }
+            """)
+            self.text_browser.setStyleSheet("""
+                QTextBrowser {
+                    background: transparent;
+                    border: none;
+                    color: #f8fafc;
+                    font-size: 13px;
+                    font-family: 'Segoe UI', sans-serif;
+                }
             """)
         else:
             self.setStyleSheet("""
@@ -106,18 +121,40 @@ class MessageBubble(QFrame):
                     background-color: #1e293b;
                     border: 1px solid #334155;
                     border-radius: 12px;
-                    margin-right: 40px;
+                    margin-right: 35px;
                     margin-left: 4px;
-                    margin-top: 4px;
-                    margin-bottom: 4px;
+                    margin-top: 3px;
+                    margin-bottom: 3px;
                 }
-                QLabel { color: #f1f5f9; font-size: 13px; font-family: 'Segoe UI', sans-serif; }
             """)
-        layout.addWidget(self.content_label)
+            self.text_browser.setStyleSheet("""
+                QTextBrowser {
+                    background: transparent;
+                    border: none;
+                    color: #f1f5f9;
+                    font-size: 13px;
+                    font-family: 'Segoe UI', sans-serif;
+                }
+            """)
+            
+        layout.addWidget(self.text_browser)
+        self.update_content(text)
+
+    def update_content(self, text):
+        self.raw_text = text
+        self.text_browser.setMarkdown(text)
+        self.adjust_height()
 
     def append_text(self, new_text):
-        current = self.content_label.text()
-        self.content_label.setText(current + new_text)
+        self.raw_text += new_text
+        self.text_browser.setMarkdown(self.raw_text)
+        self.adjust_height()
+
+    def adjust_height(self):
+        doc = self.text_browser.document()
+        doc.setTextWidth(360)
+        h = int(doc.size().height()) + 12
+        self.text_browser.setFixedHeight(max(24, h))
 
 
 class NativeAssistant(QMainWindow):
@@ -438,7 +475,7 @@ class NativeAssistant(QMainWindow):
 
         threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
 
-    def _stream_response(self, prompt, pil_image=None):
+    def _stream_response(self, prompt, image_bytes=None):
         candidate_models = [
             "gemini-flash-lite-latest",
             "gemini-flash-latest",
@@ -450,24 +487,28 @@ class NativeAssistant(QMainWindow):
         last_error = ""
 
         # Prepare contents
-        if pil_image:
-            img_byte_arr = io.BytesIO()
-            pil_image.save(img_byte_arr, format='PNG')
+        if image_bytes:
             contents = [
                 prompt,
                 types.Part.from_bytes(
-                    data=img_byte_arr.getvalue(),
-                    mime_type="image/png"
+                    data=image_bytes,
+                    mime_type="image/jpeg"
                 )
             ]
         else:
             contents = prompt
 
+        fast_config = types.GenerateContentConfig(
+            temperature=0.2,
+            system_instruction="You are a real-time, high-speed desktop assistant. Answer questions or solve problems directly, accurately, and crisply without unnecessary conversational filler."
+        )
+
         for m_name in candidate_models:
             try:
                 response = self.client.models.generate_content_stream(
                     model=m_name,
-                    contents=contents
+                    contents=contents,
+                    config=fast_config
                 )
                 for chunk in response:
                     if chunk.text:
@@ -493,20 +534,26 @@ class NativeAssistant(QMainWindow):
         self.on_status_updated("Ready", "#4ade80")
 
     def capture_screen_and_analyze(self):
-        # Grab full screen silently from framebuffer without stealing OS window focus
+        # 1. Grab full screen silently from framebuffer without stealing OS window focus
         screen = QGuiApplication.primaryScreen()
         if not screen:
             return
 
         pixmap = screen.grabWindow(0)
         
-        # Convert QPixmap to PIL Image for Gemini
+        # 2. Downscale if very large to ensure sub-second transmission
+        if pixmap.width() > 1600:
+            pixmap_scaled = pixmap.scaledToWidth(1440, Qt.TransformationMode.FastTransformation)
+        else:
+            pixmap_scaled = pixmap
+
+        # 3. Fast In-Memory JPEG Compression (80KB vs 6MB PNG)
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.ReadWrite)
-        pixmap.save(buffer, "PNG")
-        pil_img = Image.open(io.BytesIO(buffer.data()))
+        pixmap_scaled.save(buffer, "JPEG", 80)
+        image_bytes = bytes(buffer.data())
 
-        # Show in UI
+        # Show preview in UI
         self.show_and_activate()
         self.add_message("📸 Screen Analysis", is_user=True, is_image=True, pixmap=pixmap)
 
@@ -515,10 +562,10 @@ class NativeAssistant(QMainWindow):
             return
 
         self.current_ai_bubble = self.add_message("", is_user=False)
-        self.on_status_updated("Analyzing Screen...", "#fbbf24")
+        self.on_status_updated("Analyzing...", "#fbbf24")
 
-        prompt = "Analyze this screenshot. If there is a question or problem, solve it with clear step-by-step reasoning. If there is code, explain or debug it."
-        threading.Thread(target=self._stream_response, args=(prompt, pil_img), daemon=True).start()
+        prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
+        threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
     def start_voice_input(self):
         if not SPEECH_AVAILABLE:
