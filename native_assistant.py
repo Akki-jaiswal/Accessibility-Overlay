@@ -440,10 +440,9 @@ class NativeAssistant(QMainWindow):
 
     def _stream_response(self, prompt, pil_image=None):
         candidate_models = [
-            "gemini-flash-latest",
             "gemini-flash-lite-latest",
+            "gemini-flash-latest",
             "gemini-pro-latest",
-            "gemini-2.5-pro",
             "gemini-2.5-flash-lite"
         ]
 
