@@ -148,9 +148,34 @@ class NativeAssistant(QMainWindow):
         if self.api_key and GENAI_AVAILABLE:
             try:
                 genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel("gemini-2.5-flash")
-                self.chat_session = self.model.start_chat(history=[])
-                self.ai_ready = True
+                
+                # Dynamic fallback candidate models
+                candidate_models = [
+                    "gemini-3.8-flash",
+                    "gemini-2.5-flash",
+                    "gemini-2.0-flash",
+                    "gemini-1.5-flash",
+                    "gemini-1.5-pro",
+                    "gemini-pro"
+                ]
+                
+                selected_model = None
+                for model_name in candidate_models:
+                    try:
+                        test_model = genai.GenerativeModel(model_name)
+                        # Quick validation
+                        self.model = test_model
+                        self.chat_session = self.model.start_chat(history=[])
+                        selected_model = model_name
+                        print(f"Active Gemini Model: {selected_model}")
+                        break
+                    except Exception as me:
+                        print(f"Candidate {model_name} failed: {me}")
+                
+                if selected_model:
+                    self.ai_ready = True
+                else:
+                    self.ai_ready = False
             except Exception as e:
                 print(f"Failed to init Gemini API: {e}")
                 self.ai_ready = False
@@ -438,19 +463,39 @@ class NativeAssistant(QMainWindow):
         threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
 
     def _stream_response(self, prompt, image=None):
-        try:
-            if image:
-                response = self.model.generate_content([prompt, image], stream=True)
-            else:
-                response = self.chat_session.send_message(prompt, stream=True)
+        candidate_models = [
+            getattr(self, "active_model_name", "gemini-3.8-flash"),
+            "gemini-3.8-flash",
+            "gemini-2.0-flash",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro"
+        ]
+        
+        success = False
+        last_error = ""
 
-            for chunk in response:
-                if chunk.text:
-                    self.signals.stream_chunk.emit(chunk.text)
-            self.signals.stream_finished.emit()
-        except Exception as e:
-            self.signals.stream_chunk.emit(f"\n[Error: {str(e)}]")
-            self.signals.stream_finished.emit()
+        for m_name in list(dict.fromkeys(candidate_models)):
+            try:
+                curr_model = genai.GenerativeModel(m_name)
+                if image:
+                    response = curr_model.generate_content([prompt, image], stream=True)
+                else:
+                    response = curr_model.generate_content(prompt, stream=True)
+
+                for chunk in response:
+                    if chunk.text:
+                        self.signals.stream_chunk.emit(chunk.text)
+                success = True
+                self.active_model_name = m_name
+                break
+            except Exception as e:
+                last_error = str(e)
+                print(f"Model {m_name} failed: {e}")
+                continue
+
+        if not success:
+            self.signals.stream_chunk.emit(f"\n[Error: {last_error}]")
+        self.signals.stream_finished.emit()
 
     def on_stream_chunk(self, chunk):
         if self.current_ai_bubble:
