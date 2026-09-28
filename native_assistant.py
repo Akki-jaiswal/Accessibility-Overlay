@@ -627,6 +627,7 @@ class NativeAssistant(QMainWindow):
         input_inner_layout.addWidget(self.send_btn)
 
         container_layout.addWidget(self.input_card)
+        self.input_card.hide()
 
         # ==========================================
         # 4. BOTTOM DOCK (Separated Floating Action Buttons)
@@ -694,7 +695,7 @@ class NativeAssistant(QMainWindow):
 
         # Message / Chat Focus Button
         self.chat_btn = QPushButton("💬")
-        self.chat_btn.setToolTip("Focus Message Input")
+        self.chat_btn.setToolTip("Toggle Message Input")
         self.chat_btn.setFixedSize(36, 36)
         self.chat_btn.setStyleSheet("""
             QPushButton {
@@ -708,7 +709,7 @@ class NativeAssistant(QMainWindow):
                 border-color: #475569;
             }
         """)
-        self.chat_btn.clicked.connect(lambda: self.text_input.setFocus())
+        self.chat_btn.clicked.connect(self.toggle_input_card)
         dock_layout.addWidget(self.chat_btn)
 
         dock_layout.addStretch()
@@ -753,7 +754,6 @@ class NativeAssistant(QMainWindow):
                 QWidget#MainContainer {
                     background-color: transparent;
                     border: none;
-                    border-radius: 14px;
                 }
             """)
         else:
@@ -860,6 +860,7 @@ class NativeAssistant(QMainWindow):
                     if widget.text_browser.viewport():
                         widget.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         
+        self.apply_container_style()
         self.main_container.update()
         self.update()
 
@@ -898,11 +899,19 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
+    def toggle_input_card(self):
+        if self.input_card.isVisible():
+            self.input_card.hide()
+        else:
+            self.input_card.show()
+            self.text_input.setFocus()
+
     def send_text_prompt(self):
         text = self.text_input.text().strip()
         if not text:
             return
         self.text_input.clear()
+        self.input_card.hide()
         self.add_message(text, is_user=True)
 
         if not self.ai_ready:
