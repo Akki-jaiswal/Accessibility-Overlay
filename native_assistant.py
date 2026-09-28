@@ -596,7 +596,6 @@ class NativeAssistant(QMainWindow):
         self.init_ui()
         self.init_tray()
         self.setup_hotkeys()
-        self.setup_stealth_display_affinity()
 
         # Connect signals
         self.signals.stream_chunk.connect(self.on_stream_chunk)
@@ -608,16 +607,24 @@ class NativeAssistant(QMainWindow):
         self.signals.transparency_toggled_signal.connect(self.set_transparency)
         self.signals.type_through_toggled_signal.connect(self.set_type_through)
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.setup_stealth_display_affinity()
+
     def setup_stealth_display_affinity(self):
         # Native Windows Display Affinity Shield: Excludes overlay window from screen recording
         try:
             import ctypes
-            hwnd = int(self.winId())
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+            user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
+            hwnd = wintypes.HWND(int(self.winId()))
             # WDA_EXCLUDEFROMCAPTURE = 0x00000011 (Windows 10 2004+ / Windows 11)
-            res = ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x00000011)
+            res = user32.SetWindowDisplayAffinity(hwnd, 0x00000011)
             if not res:
-                ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x00000001)
-        except Exception as e:
+                user32.SetWindowDisplayAffinity(hwnd, 0x00000001)
+        except Exception:
             pass
 
     def init_ai(self):
@@ -1577,17 +1584,20 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     # Enforce Single-Instance to avoid duplicate overlapping windows
-    socket = QLocalSocket()
-    socket.connectToServer(LOCAL_SERVER_NAME)
-    if socket.waitForConnected(500):
-        # Already running! Send wake-up signal and exit cleanly
-        socket.write(b"WAKEUP\n")
-        socket.waitForBytesWritten(500)
-        sys.exit(0)
-
     local_server = QLocalServer()
-    local_server.removeServer(LOCAL_SERVER_NAME)
-    local_server.listen(LOCAL_SERVER_NAME)
+    if not local_server.listen(LOCAL_SERVER_NAME):
+        # Server might already be active; attempt connecting
+        socket = QLocalSocket()
+        socket.connectToServer(LOCAL_SERVER_NAME)
+        if socket.waitForConnected(300):
+            # Already running! Send wake-up signal and exit cleanly
+            socket.write(b"WAKEUP\n")
+            socket.waitForBytesWritten(300)
+            sys.exit(0)
+        else:
+            # Stale pipe remnant from prior crash: remove and re-listen
+            QLocalServer.removeServer(LOCAL_SERVER_NAME)
+            local_server.listen(LOCAL_SERVER_NAME)
 
     assistant = NativeAssistant()
 
