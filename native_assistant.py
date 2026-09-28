@@ -279,8 +279,8 @@ class MessageBubble(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(3)
 
         if is_image and pixmap:
             self.img_label = QLabel()
@@ -319,7 +319,7 @@ class MessageBubble(QFrame):
             painter.end()
             
             self.img_label.setPixmap(badge_pixmap)
-            self.img_label.setStyleSheet("margin-bottom: 4px; background: transparent; border: none;")
+            self.img_label.setStyleSheet("margin-bottom: 2px; background: transparent; border: none;")
             layout.addWidget(self.img_label, alignment=Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft)
 
         self.text_browser = QTextBrowser()
@@ -335,11 +335,11 @@ class MessageBubble(QFrame):
         self.text_browser.selectionChanged.connect(self.on_selection_changed)
         layout.addWidget(self.text_browser)
 
-        # 3 Quick Action Chips under AI Response (Explain More, Give Example, Simplify)
+        # 3 Clean Follow-Up Action Chips (Explain More, Give Example, Simplify - NO emoji, shown ONLY after AI response)
         if not is_user and not is_image:
             self.chips_widget = QWidget()
             chips_layout = QHBoxLayout(self.chips_widget)
-            chips_layout.setContentsMargins(0, 4, 0, 0)
+            chips_layout.setContentsMargins(0, 2, 0, 0)
             chips_layout.setSpacing(6)
             chips_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
@@ -348,34 +348,36 @@ class MessageBubble(QFrame):
                     background-color: #1e293b;
                     color: #94a3b8;
                     border: 1px solid #334155;
-                    border-radius: 11px;
-                    padding: 3px 9px;
+                    border-radius: 9px;
+                    padding: 2px 8px;
                     font-size: 11px;
-                    font-weight: 600;
+                    font-weight: 500;
                 }
                 QPushButton:hover {
                     background-color: #334155;
-                    color: #38bdf8;
-                    border-color: #0284c7;
+                    color: #ffffff;
+                    border-color: #475569;
                 }
             """
 
-            self.btn_more = QPushButton("🪄 Explain More")
+            self.btn_more = QPushButton("Explain More")
             self.btn_more.setStyleSheet(chip_style)
             self.btn_more.clicked.connect(lambda: self.on_chip_clicked("Explain More"))
             chips_layout.addWidget(self.btn_more)
 
-            self.btn_example = QPushButton("🪄 Give Example")
+            self.btn_example = QPushButton("Give Example")
             self.btn_example.setStyleSheet(chip_style)
             self.btn_example.clicked.connect(lambda: self.on_chip_clicked("Give Example"))
             chips_layout.addWidget(self.btn_example)
 
-            self.btn_simplify = QPushButton("🪄 Simplify")
+            self.btn_simplify = QPushButton("Simplify")
             self.btn_simplify.setStyleSheet(chip_style)
             self.btn_simplify.clicked.connect(lambda: self.on_chip_clicked("Simplify"))
             chips_layout.addWidget(self.btn_simplify)
 
             layout.addWidget(self.chips_widget)
+            # Initially hide chips; only show once the AI answer is generated!
+            self.chips_widget.hide()
         else:
             self.chips_widget = None
 
@@ -388,6 +390,11 @@ class MessageBubble(QFrame):
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         self.update_content(text)
+
+    def show_action_chips(self):
+        if self.chips_widget and not self.is_user and not self.is_image:
+            self.chips_widget.show()
+            self.adjust_height()
 
     def on_chip_clicked(self, chip_type):
         if not self.parent_assistant:
@@ -406,25 +413,26 @@ class MessageBubble(QFrame):
             if self.is_user:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: rgba(30, 41, 59, 0.70);
-                        border: 1px solid rgba(51, 65, 85, 0.50);
-                        border-radius: 10px;
-                        margin-left: 36px;
-                        margin-right: 4px;
-                        margin-top: 3px;
-                        margin-bottom: 3px;
+                        background-color: rgba(51, 65, 85, 0.65);
+                        border: 1px solid rgba(100, 116, 139, 0.45);
+                        border-radius: 9px;
+                        margin-left: 48px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                        padding: 3px 6px;
                     }
                 """)
             else:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: rgba(15, 23, 42, 0.55);
-                        border: 1px solid rgba(30, 41, 59, 0.45);
-                        border-radius: 10px;
-                        margin-left: 4px;
-                        margin-right: 4px;
-                        margin-top: 3px;
-                        margin-bottom: 3px;
+                        background-color: transparent;
+                        border: none;
+                        margin-left: 2px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                        padding: 2px 2px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -443,23 +451,25 @@ class MessageBubble(QFrame):
                     QFrame {
                         background-color: #1e293b;
                         border: 1px solid #334155;
-                        border-radius: 10px;
-                        margin-left: 36px;
-                        margin-right: 4px;
-                        margin-top: 3px;
-                        margin-bottom: 3px;
+                        border-radius: 9px;
+                        margin-left: 48px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                        padding: 3px 6px;
                     }
                 """)
             else:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: #131d2e;
+                        background-color: #101927;
                         border: 1px solid #1e293b;
-                        border-radius: 10px;
-                        margin-left: 4px;
-                        margin-right: 4px;
-                        margin-top: 3px;
-                        margin-bottom: 3px;
+                        border-radius: 9px;
+                        margin-left: 2px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                        padding: 4px 6px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -504,13 +514,13 @@ class MessageBubble(QFrame):
         styled_html = f"""
         <style>
             body {{ color: {text_color}; font-family: 'Segoe UI', -apple-system, sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; word-wrap: break-word; }}
-            p {{ margin: 0 0 5px 0; }}
-            strong {{ color: #38bdf8; font-weight: 600; }}
-            h1, h2, h3, h4 {{ color: #60a5fa; margin: 5px 0 3px 0; font-size: 13.5px; font-weight: bold; }}
-            ul, ol {{ margin: 0 0 5px 14px; padding: 0; }}
+            p {{ margin: 0 0 4px 0; }}
+            strong {{ color: #ffffff; font-weight: 700; }}
+            h1, h2, h3, h4 {{ color: #ffffff; margin: 4px 0 2px 0; font-size: 13.5px; font-weight: bold; }}
+            ul, ol {{ margin: 0 0 4px 14px; padding: 0; }}
             li {{ margin-bottom: 2px; }}
             code {{ background-color: {code_bg}; color: #7dd3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
-            pre {{ background-color: {pre_bg}; padding: 6px; border-radius: 5px; border: {pre_border}; margin: 3px 0; white-space: pre-wrap; word-wrap: break-word; }}
+            pre {{ background-color: {pre_bg}; padding: 5px; border-radius: 5px; border: {pre_border}; margin: 3px 0; white-space: pre-wrap; word-wrap: break-word; }}
         </style>
         {html}
         """
@@ -539,14 +549,14 @@ class MessageBubble(QFrame):
         if w <= 10:
             if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
                 vp_w = self.parent_assistant.scroll_area.viewport().width()
-                margin = 56 if self.is_user else 28
+                margin = 56 if self.is_user else 16
                 w = max(120, vp_w - margin)
             else:
                 w = 460
         doc = self.text_browser.document()
         doc.setTextWidth(w)
-        h = int(doc.size().height()) + 4
-        self.text_browser.setFixedHeight(max(20, h))
+        h = int(doc.size().height()) + 2
+        self.text_browser.setFixedHeight(max(18, h))
         self.updateGeometry()
 
 
@@ -1017,13 +1027,15 @@ class NativeAssistant(QMainWindow):
         self.setCentralWidget(self.main_container)
 
         # Install event filters for smooth header dragging
+        # Install event filters for smooth header & footer dragging
         self.header.installEventFilter(self)
+        self.dock.installEventFilter(self)
         self.brand_label.installEventFilter(self)
 
         self.add_message("Hi! I'm Aura. I can help you silently in all meetings, interviews, and code tasks.", is_user=False)
 
     def eventFilter(self, source, event):
-        if source in (self.header, self.brand_label):
+        if source in (self.header, self.dock, self.brand_label):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 return False
@@ -1351,6 +1363,8 @@ class NativeAssistant(QMainWindow):
 
     def on_stream_finished(self):
         self.status_pill.hide()
+        if self.current_ai_bubble:
+            self.current_ai_bubble.show_action_chips()
 
     def capture_screen_and_analyze(self):
         self.status_pill.setText("••• 📸 Capturing screen...")
@@ -1492,7 +1506,12 @@ class NativeAssistant(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            y = event.position().y()
+            # Restrict window dragging strictly to Header (top <= 42px) and Footer Dock (bottom >= height - 52px)
+            if y <= 42 or y >= (self.height() - 52):
+                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            else:
+                self.drag_position = None
 
     def mouseMoveEvent(self, event):
         if self.drag_position is not None and event.buttons() == Qt.MouseButton.LeftButton:
@@ -1504,6 +1523,43 @@ class NativeAssistant(QMainWindow):
 
     def mouseReleaseEvent(self, event):
         self.drag_position = None
+
+    def nativeEvent(self, eventType, message):
+        if eventType == b"windows_generic_MSG" or eventType == "windows_generic_MSG":
+            import ctypes
+            from ctypes import wintypes
+            
+            class MSG(ctypes.Structure):
+                _fields_ = [
+                    ("hwnd", wintypes.HWND),
+                    ("message", wintypes.UINT),
+                    ("wParam", wintypes.WPARAM),
+                    ("lParam", wintypes.LPARAM),
+                    ("time", wintypes.DWORD),
+                    ("pt", wintypes.POINT)
+                ]
+            
+            try:
+                msg = MSG.from_address(int(message))
+                WM_NCHITTEST = 0x0084
+                HTTRANSPARENT = -1
+                HTCLIENT = 1
+
+                if msg.message == WM_NCHITTEST and self.is_click_through:
+                    y_screen = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    win_pos = self.pos()
+                    rel_y = y_screen - win_pos.y()
+                    
+                    # Top header (<= 42px) and bottom dock (>= height - 52px) stay interactive
+                    if rel_y <= 42 or rel_y >= (self.height() - 52):
+                        return True, HTCLIENT
+                    else:
+                        # Middle content area is fully transparent to mouse events
+                        return True, HTTRANSPARENT
+            except Exception:
+                pass
+
+        return super().nativeEvent(eventType, message)
 
     def setup_hotkeys(self):
         if KEYBOARD_AVAILABLE:
