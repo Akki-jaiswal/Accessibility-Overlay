@@ -14,6 +14,12 @@ from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication
 from PIL import Image
 
 try:
+    from markdown_it import MarkdownIt
+    md_parser = MarkdownIt()
+except ImportError:
+    md_parser = None
+
+try:
     import keyboard
     KEYBOARD_AVAILABLE = True
 except ImportError:
@@ -87,7 +93,7 @@ class MessageBubble(QFrame):
             img_label.setStyleSheet("border-radius: 6px; margin-top: 4px;")
             layout.addWidget(img_label)
 
-        # Rich Markdown Text Browser
+        # Rich HTML/Markdown Text Browser
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setReadOnly(True)
@@ -140,20 +146,43 @@ class MessageBubble(QFrame):
         layout.addWidget(self.text_browser)
         self.update_content(text)
 
+    def _render_html(self, text):
+        if not text:
+            return ""
+        if md_parser:
+            html = md_parser.render(text)
+        else:
+            html = f"<p>{text}</p>"
+        
+        styled_html = f"""
+        <style>
+            body {{ color: #f1f5f9; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; margin: 0; padding: 0; }}
+            p {{ margin: 0 0 6px 0; }}
+            strong {{ color: #38bdf8; }}
+            h1, h2, h3, h4 {{ color: #60a5fa; margin: 6px 0 4px 0; font-size: 14px; font-weight: bold; }}
+            ul, ol {{ margin: 0 0 6px 16px; padding: 0; }}
+            li {{ margin-bottom: 3px; }}
+            code {{ background-color: #0f172a; color: #a5f3fc; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }}
+            pre {{ background-color: #0f172a; padding: 8px; border-radius: 6px; border: 1px solid #334155; }}
+        </style>
+        {html}
+        """
+        return styled_html
+
     def update_content(self, text):
         self.raw_text = text
-        self.text_browser.setMarkdown(text)
+        self.text_browser.setHtml(self._render_html(text))
         self.adjust_height()
 
     def append_text(self, new_text):
         self.raw_text += new_text
-        self.text_browser.setMarkdown(self.raw_text)
+        self.text_browser.setHtml(self._render_html(self.raw_text))
         self.adjust_height()
 
     def adjust_height(self):
         doc = self.text_browser.document()
         doc.setTextWidth(360)
-        h = int(doc.size().height()) + 12
+        h = int(doc.size().height()) + 14
         self.text_browser.setFixedHeight(max(24, h))
 
 
@@ -534,27 +563,39 @@ class NativeAssistant(QMainWindow):
         self.on_status_updated("Ready", "#4ade80")
 
     def capture_screen_and_analyze(self):
-        # 1. Grab full screen silently from framebuffer without stealing OS window focus
+        # 1. Hide the overlay so it is NEVER captured in its own screenshot
+        was_visible = self.isVisible()
+        if was_visible:
+            self.hide()
+            QApplication.processEvents()
+            time.sleep(0.07)  # 70ms to ensure DWM compositor renders clean background
+
+        # 2. Grab full screen silently from framebuffer without stealing OS window focus
         screen = QGuiApplication.primaryScreen()
         if not screen:
+            if was_visible:
+                self.show_and_activate()
             return
 
         pixmap = screen.grabWindow(0)
         
-        # 2. Downscale if very large to ensure sub-second transmission
+        # 3. Immediately restore the overlay to the screen
+        if was_visible:
+            self.show_and_activate()
+
+        # 4. Downscale if very large to ensure sub-second transmission
         if pixmap.width() > 1600:
             pixmap_scaled = pixmap.scaledToWidth(1440, Qt.TransformationMode.FastTransformation)
         else:
             pixmap_scaled = pixmap
 
-        # 3. Fast In-Memory JPEG Compression (80KB vs 6MB PNG)
+        # 5. Fast In-Memory JPEG Compression (80KB vs 6MB PNG)
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.ReadWrite)
         pixmap_scaled.save(buffer, "JPEG", 80)
         image_bytes = bytes(buffer.data())
 
         # Show preview in UI
-        self.show_and_activate()
         self.add_message("📸 Screen Analysis", is_user=True, is_image=True, pixmap=pixmap)
 
         if not self.ai_ready:
