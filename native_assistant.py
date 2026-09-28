@@ -7,7 +7,7 @@ import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QScrollArea, QFrame, QTextBrowser,
-    QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect, QInputDialog
+    QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect, QInputDialog, QButtonGroup
 )
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction
@@ -38,7 +38,6 @@ try:
 except ImportError:
     GENAI_AVAILABLE = False
 
-# API Key config path
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
 
@@ -65,7 +64,7 @@ class WorkerSignals(QObject):
     stream_chunk = pyqtSignal(str)
     stream_finished = pyqtSignal()
     voice_transcribed = pyqtSignal(str)
-    status_updated = pyqtSignal(str, str)  # (text, color)
+    status_updated = pyqtSignal(str, str)
     show_window_signal = pyqtSignal()
     toggle_window_signal = pyqtSignal()
     trigger_camera_signal = pyqtSignal()
@@ -79,21 +78,16 @@ class MessageBubble(QFrame):
         self.is_user = is_user
         
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(4)
-
-        sender_label = QLabel("You" if is_user else "Gemini AI")
-        sender_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #94a3b8;")
-        layout.addWidget(sender_label)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(2)
 
         if is_image and pixmap:
             img_label = QLabel()
-            scaled_pixmap = pixmap.scaledToWidth(260, Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation)
             img_label.setPixmap(scaled_pixmap)
-            img_label.setStyleSheet("border-radius: 6px; margin-top: 4px;")
+            img_label.setStyleSheet("border-radius: 6px; margin-bottom: 4px;")
             layout.addWidget(img_label)
 
-        # Rich HTML/Markdown Text Browser
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setReadOnly(True)
@@ -104,21 +98,12 @@ class MessageBubble(QFrame):
             self.setStyleSheet("""
                 QFrame {
                     background-color: #1e3a8a;
-                    border: 1px solid #2563eb;
-                    border-radius: 12px;
-                    margin-left: 35px;
-                    margin-right: 4px;
-                    margin-top: 3px;
-                    margin-bottom: 3px;
-                }
-            """)
-            self.text_browser.setStyleSheet("""
-                QTextBrowser {
-                    background: transparent;
-                    border: none;
-                    color: #f8fafc;
-                    font-size: 13px;
-                    font-family: 'Segoe UI', sans-serif;
+                    border: 1px solid #3b82f6;
+                    border-radius: 10px;
+                    margin-left: 30px;
+                    margin-right: 2px;
+                    margin-top: 2px;
+                    margin-bottom: 2px;
                 }
             """)
         else:
@@ -126,22 +111,23 @@ class MessageBubble(QFrame):
                 QFrame {
                     background-color: #1e293b;
                     border: 1px solid #334155;
-                    border-radius: 12px;
-                    margin-right: 35px;
-                    margin-left: 4px;
-                    margin-top: 3px;
-                    margin-bottom: 3px;
+                    border-radius: 10px;
+                    margin-right: 30px;
+                    margin-left: 2px;
+                    margin-top: 2px;
+                    margin-bottom: 2px;
                 }
             """)
-            self.text_browser.setStyleSheet("""
-                QTextBrowser {
-                    background: transparent;
-                    border: none;
-                    color: #f1f5f9;
-                    font-size: 13px;
-                    font-family: 'Segoe UI', sans-serif;
-                }
-            """)
+            
+        self.text_browser.setStyleSheet("""
+            QTextBrowser {
+                background: transparent;
+                border: none;
+                color: #f8fafc;
+                font-size: 13px;
+                font-family: 'Segoe UI', -apple-system, sans-serif;
+            }
+        """)
             
         layout.addWidget(self.text_browser)
         self.update_content(text)
@@ -156,14 +142,14 @@ class MessageBubble(QFrame):
         
         styled_html = f"""
         <style>
-            body {{ color: #f1f5f9; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.5; margin: 0; padding: 0; }}
-            p {{ margin: 0 0 6px 0; }}
-            strong {{ color: #38bdf8; }}
-            h1, h2, h3, h4 {{ color: #60a5fa; margin: 6px 0 4px 0; font-size: 14px; font-weight: bold; }}
-            ul, ol {{ margin: 0 0 6px 16px; padding: 0; }}
-            li {{ margin-bottom: 3px; }}
-            code {{ background-color: #0f172a; color: #a5f3fc; padding: 2px 4px; border-radius: 4px; font-family: Consolas, monospace; }}
-            pre {{ background-color: #0f172a; padding: 8px; border-radius: 6px; border: 1px solid #334155; }}
+            body {{ color: #f1f5f9; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; }}
+            p {{ margin: 0 0 5px 0; }}
+            strong {{ color: #38bdf8; font-weight: 600; }}
+            h1, h2, h3, h4 {{ color: #60a5fa; margin: 6px 0 3px 0; font-size: 13.5px; font-weight: bold; }}
+            ul, ol {{ margin: 0 0 5px 14px; padding: 0; }}
+            li {{ margin-bottom: 2px; }}
+            code {{ background-color: #0f172a; color: #a5f3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
+            pre {{ background-color: #0f172a; padding: 6px; border-radius: 5px; border: 1px solid #334155; margin: 4px 0; }}
         </style>
         {html}
         """
@@ -181,22 +167,31 @@ class MessageBubble(QFrame):
 
     def adjust_height(self):
         doc = self.text_browser.document()
-        doc.setTextWidth(360)
-        h = int(doc.size().height()) + 14
-        self.text_browser.setFixedHeight(max(24, h))
+        doc.setTextWidth(340)
+        h = int(doc.size().height()) + 10
+        self.text_browser.setFixedHeight(max(20, h))
 
 
 class NativeAssistant(QMainWindow):
+    # 3-Stage sizes (Compact -> Medium -> Large)
+    SIZES = [
+        (380, 520),  # Stage 0: Compact Default
+        (540, 720),  # Stage 1: Expanded
+        (720, 880)   # Stage 2: Large
+    ]
+
     def __init__(self):
         super().__init__()
         self.oldPos = None
         self.is_ghost_mode = False
         self.is_listening = False
+        self.current_size_index = 0
         self.signals = WorkerSignals()
         self.current_ai_bubble = None
         self.api_key = load_api_key()
         self.client = None
-        self.active_model_name = "gemini-flash-latest"
+        self.active_model_name = "gemini-flash-lite-latest"
+        self.current_mode = "manual"  # 'manual' or 'auto'
 
         self.init_ai()
         self.init_ui()
@@ -217,7 +212,6 @@ class NativeAssistant(QMainWindow):
             try:
                 self.client = genai.Client(api_key=self.api_key)
                 self.ai_ready = True
-                print("Gemini GenAI client initialized.")
             except Exception as e:
                 print(f"Failed to init Gemini API: {e}")
                 self.ai_ready = False
@@ -227,118 +221,138 @@ class NativeAssistant(QMainWindow):
     def init_ui(self):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.resize(460, 680)
-        self.setMinimumSize(360, 480)
+        
+        w, h = self.SIZES[0]
+        self.resize(w, h)
+        self.setMinimumSize(320, 400)
 
-        # Central widget container with dark modern theme
+        # Main dark glassmorphism card
         self.main_container = QWidget(self)
         self.main_container.setObjectName("MainContainer")
         self.main_container.setStyleSheet("""
             QWidget#MainContainer {
-                background-color: rgba(15, 23, 42, 0.95);
+                background-color: rgba(15, 23, 42, 0.96);
                 border: 1px solid #334155;
-                border-radius: 16px;
+                border-radius: 14px;
             }
         """)
 
-        # Drop shadow for clean floating look
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(25)
-        shadow.setColor(QColor(0, 0, 0, 180))
-        shadow.setOffset(0, 8)
+        shadow.setBlurRadius(20)
+        shadow.setColor(QColor(0, 0, 0, 200))
+        shadow.setOffset(0, 6)
         self.main_container.setGraphicsEffect(shadow)
 
         container_layout = QVBoxLayout(self.main_container)
-        container_layout.setContentsMargins(12, 10, 12, 12)
-        container_layout.setSpacing(8)
+        container_layout.setContentsMargins(10, 8, 10, 8)
+        container_layout.setSpacing(6)
 
-        # --- Top Header / Toolbar ---
+        # ==========================================
+        # 1. TOP HEADER (Pill Mode Toggle + Window Controls)
+        # ==========================================
         self.header = QWidget()
         header_layout = QHBoxLayout(self.header)
-        header_layout.setContentsMargins(4, 0, 4, 0)
+        header_layout.setContentsMargins(2, 0, 2, 0)
         header_layout.setSpacing(6)
 
-        # Title / Status
-        self.title_label = QLabel("⚡ Native AI")
-        self.title_label.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 14px;")
-        header_layout.addWidget(self.title_label)
+        # Pill Switch Container for Manual vs Auto
+        self.mode_container = QFrame()
+        self.mode_container.setStyleSheet("""
+            QFrame {
+                background-color: #0f172a;
+                border: 1px solid #334155;
+                border-radius: 12px;
+                padding: 1px;
+            }
+        """)
+        mode_layout = QHBoxLayout(self.mode_container)
+        mode_layout.setContentsMargins(2, 2, 2, 2)
+        mode_layout.setSpacing(2)
 
-        self.status_badge = QLabel("Ready")
-        self.status_badge.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 4px;")
-        header_layout.addWidget(self.status_badge)
+        self.manual_btn = QPushButton("Manual")
+        self.manual_btn.setCheckable(True)
+        self.manual_btn.setChecked(True)
+        self.manual_btn.setFixedHeight(22)
+        self.manual_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                color: #ffffff;
+                font-size: 11px;
+                font-weight: bold;
+                border: none;
+                border-radius: 10px;
+                padding: 0 10px;
+            }
+        """)
+        self.manual_btn.clicked.connect(lambda: self.set_mode("manual"))
+        mode_layout.addWidget(self.manual_btn)
 
+        self.auto_btn = QPushButton("Auto")
+        self.auto_btn.setCheckable(True)
+        self.auto_btn.setFixedHeight(22)
+        self.auto_btn.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #94a3b8;
+                font-size: 11px;
+                font-weight: bold;
+                border: none;
+                border-radius: 10px;
+                padding: 0 10px;
+            }
+            QPushButton:hover { color: #f8fafc; }
+        """)
+        self.auto_btn.clicked.connect(lambda: self.set_mode("auto"))
+        mode_layout.addWidget(self.auto_btn)
+
+        header_layout.addWidget(self.mode_container)
         header_layout.addStretch()
 
-        # 📸 Quick Camera Button (1-Click screen analyze)
-        self.cam_btn = QPushButton("📸")
-        self.cam_btn.setToolTip("1-Click Screen Capture & Analyze (Ctrl+Shift+S)")
-        self.cam_btn.setFixedSize(28, 28)
-        self.cam_btn.setStyleSheet("""
-            QPushButton { background-color: #1e293b; border: 1px solid #475569; border-radius: 6px; font-size: 13px; }
-            QPushButton:hover { background-color: #3b82f6; border-color: #60a5fa; }
-        """)
-        self.cam_btn.clicked.connect(self.capture_screen_and_analyze)
-        header_layout.addWidget(self.cam_btn)
-
-        # 👻 Ghost Mode Button
-        self.ghost_btn = QPushButton("👻")
-        self.ghost_btn.setToolTip("Toggle Ghost Transparency (Ctrl+G)")
-        self.ghost_btn.setFixedSize(28, 28)
-        self.ghost_btn.setStyleSheet("""
-            QPushButton { background-color: #1e293b; border: 1px solid #475569; border-radius: 6px; font-size: 13px; }
-            QPushButton:hover { background-color: #6366f1; border-color: #818cf8; }
-        """)
-        self.ghost_btn.clicked.connect(self.toggle_ghost_mode)
-        header_layout.addWidget(self.ghost_btn)
-
-        # ⚙️ Settings / API Key Button
-        self.key_btn = QPushButton("⚙️")
-        self.key_btn.setToolTip("Set Gemini API Key")
-        self.key_btn.setFixedSize(28, 28)
-        self.key_btn.setStyleSheet("""
-            QPushButton { background-color: #1e293b; border: 1px solid #475569; border-radius: 6px; font-size: 13px; }
-            QPushButton:hover { background-color: #334155; }
-        """)
-        self.key_btn.clicked.connect(self.prompt_api_key)
-        header_layout.addWidget(self.key_btn)
-
-        # Minimize Button
+        # Top-right Window Controls: Minimize (—), 3-State Maximize (□), Close (✕)
         self.min_btn = QPushButton("—")
-        self.min_btn.setFixedSize(28, 28)
+        self.min_btn.setFixedSize(24, 24)
         self.min_btn.setStyleSheet("""
-            QPushButton { background-color: transparent; border: none; color: #94a3b8; font-size: 13px; font-weight: bold; }
-            QPushButton:hover { background-color: #334155; color: white; border-radius: 6px; }
+            QPushButton { background: transparent; border: none; color: #94a3b8; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #334155; color: white; border-radius: 4px; }
         """)
         self.min_btn.clicked.connect(self.hide)
         header_layout.addWidget(self.min_btn)
 
-        # Close Button
+        self.max_btn = QPushButton("□")
+        self.max_btn.setToolTip("Cycle Size (Compact / Medium / Large)")
+        self.max_btn.setFixedSize(24, 24)
+        self.max_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; color: #94a3b8; font-size: 13px; font-weight: bold; }
+            QPushButton:hover { background-color: #334155; color: #38bdf8; border-radius: 4px; }
+        """)
+        self.max_btn.clicked.connect(self.cycle_window_size)
+        header_layout.addWidget(self.max_btn)
+
         self.close_btn = QPushButton("✕")
-        self.close_btn.setFixedSize(28, 28)
+        self.close_btn.setFixedSize(24, 24)
         self.close_btn.setStyleSheet("""
-            QPushButton { background-color: transparent; border: none; color: #94a3b8; font-size: 13px; font-weight: bold; }
-            QPushButton:hover { background-color: #ef4444; color: white; border-radius: 6px; }
+            QPushButton { background: transparent; border: none; color: #94a3b8; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #ef4444; color: white; border-radius: 4px; }
         """)
         self.close_btn.clicked.connect(self.close)
         header_layout.addWidget(self.close_btn)
 
         container_layout.addWidget(self.header)
 
-        # --- Chat Scroll Area ---
+        # ==========================================
+        # 2. CHAT SCROLL AREA (Clean & Minimalist)
+        # ==========================================
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setStyleSheet("""
             QScrollArea { border: none; background: transparent; }
             QScrollBar:vertical {
                 border: none;
-                background: rgba(15, 23, 42, 0.4);
-                width: 6px;
-                border-radius: 3px;
+                background: rgba(15, 23, 42, 0.3);
+                width: 4px;
+                border-radius: 2px;
             }
-            QScrollBar::handle:vertical {
-                background: #475569;
-                border-radius: 3px;
-            }
+            QScrollBar::handle:vertical { background: #475569; border-radius: 2px; }
             QScrollBar::handle:vertical:hover { background: #64748b; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
         """)
@@ -347,81 +361,129 @@ class NativeAssistant(QMainWindow):
         self.chat_widget.setStyleSheet("background: transparent;")
         self.chat_layout = QVBoxLayout(self.chat_widget)
         self.chat_layout.setContentsMargins(0, 0, 0, 0)
-        self.chat_layout.setSpacing(6)
+        self.chat_layout.setSpacing(4)
         self.chat_layout.addStretch()
 
         self.scroll_area.setWidget(self.chat_widget)
         container_layout.addWidget(self.scroll_area)
 
-        # --- Input Bar ---
-        self.input_container = QWidget()
-        self.input_container.setStyleSheet("""
-            QWidget {
+        # ==========================================
+        # 3. BOTTOM FOOTER TOOLBAR (Settings, Camera, Ghost, Input)
+        # ==========================================
+        self.footer = QWidget()
+        footer_layout = QHBoxLayout(self.footer)
+        footer_layout.setContentsMargins(0, 2, 0, 0)
+        footer_layout.setSpacing(6)
+
+        # Left tools: ⚙️ Settings, 📸 Camera, 👻 Ghost
+        self.key_btn = QPushButton("⚙️")
+        self.key_btn.setToolTip("Configure Gemini API Key")
+        self.key_btn.setFixedSize(30, 30)
+        self.key_btn.setStyleSheet("""
+            QPushButton { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; font-size: 13px; }
+            QPushButton:hover { background-color: #334155; border-color: #64748b; }
+        """)
+        self.key_btn.clicked.connect(self.prompt_api_key)
+        footer_layout.addWidget(self.key_btn)
+
+        self.cam_btn = QPushButton("📸")
+        self.cam_btn.setToolTip("1-Click Screen Capture (Ctrl+Shift+S)")
+        self.cam_btn.setFixedSize(30, 30)
+        self.cam_btn.setStyleSheet("""
+            QPushButton { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; font-size: 13px; }
+            QPushButton:hover { background-color: #2563eb; border-color: #3b82f6; }
+        """)
+        self.cam_btn.clicked.connect(self.capture_screen_and_analyze)
+        footer_layout.addWidget(self.cam_btn)
+
+        self.ghost_btn = QPushButton("👻")
+        self.ghost_btn.setToolTip("Toggle Ghost Mode (Ctrl+G)")
+        self.ghost_btn.setFixedSize(30, 30)
+        self.ghost_btn.setStyleSheet("""
+            QPushButton { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; font-size: 13px; }
+            QPushButton:hover { background-color: #6366f1; border-color: #818cf8; }
+        """)
+        self.ghost_btn.clicked.connect(self.toggle_ghost_mode)
+        footer_layout.addWidget(self.ghost_btn)
+
+        # Input Box Container
+        self.input_box = QFrame()
+        self.input_box.setStyleSheet("""
+            QFrame {
                 background-color: #1e293b;
                 border: 1px solid #334155;
-                border-radius: 10px;
+                border-radius: 8px;
             }
         """)
-        input_layout = QHBoxLayout(self.input_container)
-        input_layout.setContentsMargins(8, 4, 8, 4)
-        input_layout.setSpacing(6)
+        input_inner_layout = QHBoxLayout(self.input_box)
+        input_inner_layout.setContentsMargins(6, 2, 4, 2)
+        input_inner_layout.setSpacing(4)
 
-        # Voice Dictation Button
-        self.voice_btn = QPushButton("🎙️")
-        self.voice_btn.setToolTip("Voice Dictation (Ctrl+Shift+V)")
-        self.voice_btn.setFixedSize(30, 30)
-        self.voice_btn.setStyleSheet("""
-            QPushButton { background: transparent; border: none; font-size: 15px; }
-            QPushButton:hover { background-color: #334155; border-radius: 6px; }
-        """)
-        self.voice_btn.clicked.connect(self.start_voice_input)
-        input_layout.addWidget(self.voice_btn)
-
-        # Text Input Field
         self.text_input = QLineEdit()
-        self.text_input.setPlaceholderText("Ask AI or press 📸 for instant screen solve...")
+        self.text_input.setPlaceholderText("Ask or press 📸 to solve...")
         self.text_input.setStyleSheet("""
             QLineEdit {
                 background: transparent;
                 border: none;
                 color: #f8fafc;
-                font-size: 13px;
-                padding: 4px;
+                font-size: 12.5px;
+                padding: 2px;
             }
         """)
         self.text_input.returnPressed.connect(self.send_text_prompt)
-        input_layout.addWidget(self.text_input)
+        input_inner_layout.addWidget(self.text_input)
 
-        # Send Button
+        self.voice_btn = QPushButton("🎙️")
+        self.voice_btn.setToolTip("Voice (Ctrl+Shift+V)")
+        self.voice_btn.setFixedSize(24, 24)
+        self.voice_btn.setStyleSheet("""
+            QPushButton { background: transparent; border: none; font-size: 13px; }
+            QPushButton:hover { background-color: #334155; border-radius: 4px; }
+        """)
+        self.voice_btn.clicked.connect(self.start_voice_input)
+        input_inner_layout.addWidget(self.voice_btn)
+
         self.send_btn = QPushButton("➤")
-        self.send_btn.setFixedSize(30, 30)
+        self.send_btn.setFixedSize(24, 24)
         self.send_btn.setStyleSheet("""
             QPushButton {
-                background-color: #3b82f6;
+                background-color: #2563eb;
                 color: white;
                 border: none;
-                border-radius: 6px;
-                font-size: 14px;
+                border-radius: 4px;
+                font-size: 12px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #2563eb; }
+            QPushButton:hover { background-color: #1d4ed8; }
         """)
         self.send_btn.clicked.connect(self.send_text_prompt)
-        input_layout.addWidget(self.send_btn)
+        input_inner_layout.addWidget(self.send_btn)
 
-        container_layout.addWidget(self.input_container)
+        footer_layout.addWidget(self.input_box)
+        container_layout.addWidget(self.footer)
 
         self.setCentralWidget(self.main_container)
 
-        # Initial Welcome Message
-        if not self.api_key:
-            self.add_message("👋 Welcome! Click the ⚙️ button at the top to add your free Gemini API Key and start instant AI streaming.", is_user=False)
+    def set_mode(self, mode):
+        self.current_mode = mode
+        if mode == "manual":
+            self.manual_btn.setChecked(True)
+            self.manual_btn.setStyleSheet("background-color: #2563eb; color: #ffffff; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
+            self.auto_btn.setChecked(False)
+            self.auto_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
         else:
-            self.add_message("⚡ Native AI ready. Press 📸 or Ctrl+Shift+S for instant full-screen capture.", is_user=False)
+            self.auto_btn.setChecked(True)
+            self.auto_btn.setStyleSheet("background-color: #10b981; color: #ffffff; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
+            self.manual_btn.setChecked(False)
+            self.manual_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
+
+    def cycle_window_size(self):
+        self.current_size_index = (self.current_size_index + 1) % len(self.SIZES)
+        w, h = self.SIZES[self.current_size_index]
+        self.resize(w, h)
 
     def init_tray(self):
         self.tray_icon = QSystemTrayIcon(self)
-        # Create a clean tray icon programmatically
         pixmap = QPixmap(32, 32)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
@@ -472,17 +534,11 @@ class NativeAssistant(QMainWindow):
             self.api_key = key.strip()
             save_api_key(self.api_key)
             self.init_ai()
-            if self.ai_ready:
-                self.add_message("✅ API Key configured successfully! Ready to stream.", is_user=False)
-                self.on_status_updated("Ready", "#4ade80")
-            else:
-                self.add_message("❌ Failed to initialize client. Please check your API key.", is_user=False)
 
     def add_message(self, text="", is_user=False, is_image=False, pixmap=None):
         bubble = MessageBubble(text, is_user=is_user, is_image=is_image, pixmap=pixmap)
-        # Insert before the bottom stretch
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
-        QTimer.singleShot(50, self.scroll_to_bottom)
+        QTimer.singleShot(40, self.scroll_to_bottom)
         return bubble
 
     def scroll_to_bottom(self):
@@ -496,12 +552,10 @@ class NativeAssistant(QMainWindow):
         self.add_message(text, is_user=True)
 
         if not self.ai_ready:
-            self.add_message("⚠️ Please configure your Gemini API key via the ⚙️ settings button first.", is_user=False)
+            self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
             return
 
         self.current_ai_bubble = self.add_message("", is_user=False)
-        self.on_status_updated("Thinking...", "#38bdf8")
-
         threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
 
     def _stream_response(self, prompt, image_bytes=None):
@@ -515,7 +569,6 @@ class NativeAssistant(QMainWindow):
         success = False
         last_error = ""
 
-        # Prepare contents
         if image_bytes:
             contents = [
                 prompt,
@@ -529,7 +582,7 @@ class NativeAssistant(QMainWindow):
 
         fast_config = types.GenerateContentConfig(
             temperature=0.2,
-            system_instruction="You are a real-time, high-speed desktop assistant. Answer questions or solve problems directly, accurately, and crisply without unnecessary conversational filler."
+            system_instruction="You are a real-time, high-speed desktop assistant. Answer questions or solve problems directly, accurately, and crisply. Format cleanly with clear bullet points where helpful."
         )
 
         for m_name in candidate_models:
@@ -560,17 +613,15 @@ class NativeAssistant(QMainWindow):
             self.scroll_to_bottom()
 
     def on_stream_finished(self):
-        self.on_status_updated("Ready", "#4ade80")
+        pass
 
     def capture_screen_and_analyze(self):
-        # 1. Hide the overlay so it is NEVER captured in its own screenshot
         was_visible = self.isVisible()
         if was_visible:
             self.hide()
             QApplication.processEvents()
-            time.sleep(0.07)  # 70ms to ensure DWM compositor renders clean background
+            time.sleep(0.07)
 
-        # 2. Grab full screen silently from framebuffer without stealing OS window focus
         screen = QGuiApplication.primaryScreen()
         if not screen:
             if was_visible:
@@ -579,43 +630,33 @@ class NativeAssistant(QMainWindow):
 
         pixmap = screen.grabWindow(0)
         
-        # 3. Immediately restore the overlay to the screen
         if was_visible:
             self.show_and_activate()
 
-        # 4. Downscale if very large to ensure sub-second transmission
         if pixmap.width() > 1600:
             pixmap_scaled = pixmap.scaledToWidth(1440, Qt.TransformationMode.FastTransformation)
         else:
             pixmap_scaled = pixmap
 
-        # 5. Fast In-Memory JPEG Compression (80KB vs 6MB PNG)
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.ReadWrite)
         pixmap_scaled.save(buffer, "JPEG", 80)
         image_bytes = bytes(buffer.data())
 
-        # Show preview in UI
         self.add_message("📸 Screen Analysis", is_user=True, is_image=True, pixmap=pixmap)
 
         if not self.ai_ready:
-            self.add_message("⚠️ Gemini API key not set. Click ⚙️ to configure.", is_user=False)
+            self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
             return
 
         self.current_ai_bubble = self.add_message("", is_user=False)
-        self.on_status_updated("Analyzing...", "#fbbf24")
-
         prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
         threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
     def start_voice_input(self):
-        if not SPEECH_AVAILABLE:
-            self.add_message("⚠️ SpeechRecognition or PyAudio missing.", is_user=False)
-            return
-        if self.is_listening:
+        if not SPEECH_AVAILABLE or self.is_listening:
             return
         self.is_listening = True
-        self.on_status_updated("Listening...", "#ef4444")
 
         def listen_worker():
             try:
@@ -623,10 +664,9 @@ class NativeAssistant(QMainWindow):
                 r.pause_threshold = 0.8
                 r.dynamic_energy_threshold = True
                 with sr.Microphone() as src:
-                    r.adjust_for_ambient_noise(src, duration=0.4)
+                    r.adjust_for_ambient_noise(src, duration=0.3)
                     audio = r.listen(src, timeout=5, phrase_time_limit=15)
                 
-                # Try multi-lingual English recognition (en-IN first, fallback to en-US)
                 text = ""
                 try:
                     text = r.recognize_google(audio, language="en-IN")
@@ -639,7 +679,6 @@ class NativeAssistant(QMainWindow):
                 print(f"Voice error: {e}")
             finally:
                 self.is_listening = False
-                self.signals.status_updated.emit("Ready", "#4ade80")
 
         threading.Thread(target=listen_worker, daemon=True).start()
 
@@ -648,26 +687,19 @@ class NativeAssistant(QMainWindow):
         self.send_text_prompt()
 
     def on_status_updated(self, text, color):
-        self.status_badge.setText(text)
-        self.status_badge.setStyleSheet(f"color: {color}; font-size: 11px; font-weight: bold; margin-left: 4px;")
+        pass
 
     def toggle_ghost_mode(self):
         if not self.is_ghost_mode:
-            # Ghost Mode: 45% transparent, hides inputs, floats text over screen
-            self.setWindowOpacity(0.45)
-            self.input_container.hide()
+            self.setWindowOpacity(0.35)
+            self.footer.hide()
             self.is_ghost_mode = True
-            self.ghost_btn.setStyleSheet("""
-                QPushButton { background-color: #6366f1; border: 1px solid #818cf8; border-radius: 6px; font-size: 13px; }
-            """)
+            self.ghost_btn.setStyleSheet("background-color: #6366f1; border: 1px solid #818cf8; border-radius: 8px; font-size: 13px;")
         else:
             self.setWindowOpacity(1.0)
-            self.input_container.show()
+            self.footer.show()
             self.is_ghost_mode = False
-            self.ghost_btn.setStyleSheet("""
-                QPushButton { background-color: #1e293b; border: 1px solid #475569; border-radius: 6px; font-size: 13px; }
-                QPushButton:hover { background-color: #6366f1; border-color: #818cf8; }
-            """)
+            self.ghost_btn.setStyleSheet("background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; font-size: 13px;")
 
     def toggle_visibility(self):
         if self.isVisible() and not self.isMinimized():
@@ -680,8 +712,9 @@ class NativeAssistant(QMainWindow):
         self.activateWindow()
         self.raise_()
 
+    # Multi-zone dragging (Draggable from Header, Footer, and window boundaries)
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= 40:
+        if event.button() == Qt.MouseButton.LeftButton:
             self.oldPos = event.globalPosition().toPoint()
 
     def mouseMoveEvent(self, event):
