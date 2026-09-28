@@ -6,11 +6,11 @@ import threading
 import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTextEdit, QLineEdit, QPushButton, QLabel, QScrollArea, QFrame,
+    QLineEdit, QPushButton, QLabel, QScrollArea, QFrame,
     QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect, QInputDialog
 )
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QByteArray, QBuffer, QIODevice
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction, QImage
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice
+from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction
 from PIL import Image
 
 try:
@@ -26,7 +26,8 @@ except ImportError:
     SPEECH_AVAILABLE = False
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
@@ -127,8 +128,9 @@ class NativeAssistant(QMainWindow):
         self.is_listening = False
         self.signals = WorkerSignals()
         self.current_ai_bubble = None
-        self.chat_history = []
         self.api_key = load_api_key()
+        self.client = None
+        self.active_model_name = "gemini-flash-latest"
 
         self.init_ai()
         self.init_ui()
@@ -147,35 +149,9 @@ class NativeAssistant(QMainWindow):
     def init_ai(self):
         if self.api_key and GENAI_AVAILABLE:
             try:
-                genai.configure(api_key=self.api_key)
-                
-                # Dynamic fallback candidate models
-                candidate_models = [
-                    "gemini-3.8-flash",
-                    "gemini-2.5-flash",
-                    "gemini-2.0-flash",
-                    "gemini-1.5-flash",
-                    "gemini-1.5-pro",
-                    "gemini-pro"
-                ]
-                
-                selected_model = None
-                for model_name in candidate_models:
-                    try:
-                        test_model = genai.GenerativeModel(model_name)
-                        # Quick validation
-                        self.model = test_model
-                        self.chat_session = self.model.start_chat(history=[])
-                        selected_model = model_name
-                        print(f"Active Gemini Model: {selected_model}")
-                        break
-                    except Exception as me:
-                        print(f"Candidate {model_name} failed: {me}")
-                
-                if selected_model:
-                    self.ai_ready = True
-                else:
-                    self.ai_ready = False
+                self.client = genai.Client(api_key=self.api_key)
+                self.ai_ready = True
+                print("Gemini GenAI client initialized.")
             except Exception as e:
                 print(f"Failed to init Gemini API: {e}")
                 self.ai_ready = False
@@ -249,7 +225,7 @@ class NativeAssistant(QMainWindow):
         self.ghost_btn.clicked.connect(self.toggle_ghost_mode)
         header_layout.addWidget(self.ghost_btn)
 
-        # 🔑 Settings / API Key Button
+        # ⚙️ Settings / API Key Button
         self.key_btn = QPushButton("⚙️")
         self.key_btn.setToolTip("Set Gemini API Key")
         self.key_btn.setFixedSize(28, 28)
@@ -434,7 +410,7 @@ class NativeAssistant(QMainWindow):
                 self.add_message("✅ API Key configured successfully! Ready to stream.", is_user=False)
                 self.on_status_updated("Ready", "#4ade80")
             else:
-                self.add_message("❌ Failed to initialize model with this API key. Check the key and try again.", is_user=False)
+                self.add_message("❌ Failed to initialize client. Please check your API key.", is_user=False)
 
     def add_message(self, text="", is_user=False, is_image=False, pixmap=None):
         bubble = MessageBubble(text, is_user=is_user, is_image=is_image, pixmap=pixmap)
@@ -462,26 +438,38 @@ class NativeAssistant(QMainWindow):
 
         threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
 
-    def _stream_response(self, prompt, image=None):
+    def _stream_response(self, prompt, pil_image=None):
         candidate_models = [
-            getattr(self, "active_model_name", "gemini-3.8-flash"),
-            "gemini-3.8-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro"
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-pro-latest",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash-lite"
         ]
-        
+
         success = False
         last_error = ""
 
-        for m_name in list(dict.fromkeys(candidate_models)):
-            try:
-                curr_model = genai.GenerativeModel(m_name)
-                if image:
-                    response = curr_model.generate_content([prompt, image], stream=True)
-                else:
-                    response = curr_model.generate_content(prompt, stream=True)
+        # Prepare contents
+        if pil_image:
+            img_byte_arr = io.BytesIO()
+            pil_image.save(img_byte_arr, format='PNG')
+            contents = [
+                prompt,
+                types.Part.from_bytes(
+                    data=img_byte_arr.getvalue(),
+                    mime_type="image/png"
+                )
+            ]
+        else:
+            contents = prompt
 
+        for m_name in candidate_models:
+            try:
+                response = self.client.models.generate_content_stream(
+                    model=m_name,
+                    contents=contents
+                )
                 for chunk in response:
                     if chunk.text:
                         self.signals.stream_chunk.emit(chunk.text)
@@ -506,7 +494,7 @@ class NativeAssistant(QMainWindow):
         self.on_status_updated("Ready", "#4ade80")
 
     def capture_screen_and_analyze(self):
-        # 1. Grab full screen silently from framebuffer without stealing OS window focus
+        # Grab full screen silently from framebuffer without stealing OS window focus
         screen = QGuiApplication.primaryScreen()
         if not screen:
             return
@@ -530,7 +518,7 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.on_status_updated("Analyzing Screen...", "#fbbf24")
 
-        prompt = "Analyze this screenshot. If there is a question or problem, solve it with full explanation. If there is code, explain or debug it."
+        prompt = "Analyze this screenshot. If there is a question or problem, solve it with clear step-by-step reasoning. If there is code, explain or debug it."
         threading.Thread(target=self._stream_response, args=(prompt, pil_img), daemon=True).start()
 
     def start_voice_input(self):
@@ -545,10 +533,19 @@ class NativeAssistant(QMainWindow):
         def listen_worker():
             try:
                 r = sr.Recognizer()
+                r.pause_threshold = 0.8
+                r.dynamic_energy_threshold = True
                 with sr.Microphone() as src:
-                    r.adjust_for_ambient_noise(src, duration=0.2)
+                    r.adjust_for_ambient_noise(src, duration=0.4)
                     audio = r.listen(src, timeout=5, phrase_time_limit=15)
-                text = r.recognize_google(audio)
+                
+                # Try multi-lingual English recognition (en-IN first, fallback to en-US)
+                text = ""
+                try:
+                    text = r.recognize_google(audio, language="en-IN")
+                except Exception:
+                    text = r.recognize_google(audio, language="en-US")
+                
                 if text:
                     self.signals.voice_transcribed.emit(text)
             except Exception as e:
@@ -569,7 +566,7 @@ class NativeAssistant(QMainWindow):
 
     def toggle_ghost_mode(self):
         if not self.is_ghost_mode:
-            # Ghost Mode: 85% transparent, hides inputs, floats text over screen
+            # Ghost Mode: 45% transparent, hides inputs, floats text over screen
             self.setWindowOpacity(0.45)
             self.input_container.hide()
             self.is_ghost_mode = True
