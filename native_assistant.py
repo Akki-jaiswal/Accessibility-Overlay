@@ -145,6 +145,90 @@ class CompactToggleSwitch(QWidget):
             self.label.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 500;")
 
 
+# --- Hover-Style Transparency Slider (Bottom-Right, 6-Second Auto-Hide) ---
+class HoverSliderBox(QFrame):
+    valueChanged = pyqtSignal(int)
+
+    def __init__(self, parent_assistant=None):
+        super().__init__(parent_assistant)
+        self.parent_assistant = parent_assistant
+        self.setStyleSheet("""
+            QFrame {
+                background-color: rgba(30, 41, 59, 0.90);
+                border: 1px solid #334155;
+                border-radius: 12px;
+                padding: 1px 6px;
+            }
+        """)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 2, 5, 2)
+        layout.setSpacing(6)
+
+        self.slider_icon = QLabel("◐")
+        self.slider_icon.setStyleSheet("color: #94a3b8; font-size: 12px; background: transparent; border: none;")
+        layout.addWidget(self.slider_icon)
+
+        self.trans_slider = QSlider(Qt.Orientation.Horizontal)
+        self.trans_slider.setRange(0, 100)
+        self.trans_slider.setValue(self.parent_assistant.transparency_val if self.parent_assistant else 65)
+        self.trans_slider.setFixedWidth(80)
+        self.trans_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 4px;
+                background: #475569;
+                border-radius: 2px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #3b82f6;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #ffffff;
+                width: 10px;
+                margin-top: -3px;
+                margin-bottom: -3px;
+                border-radius: 5px;
+            }
+        """)
+        layout.addWidget(self.trans_slider)
+
+        self.percent_label = QLabel(f"{self.trans_slider.value()}%")
+        self.percent_label.setStyleSheet("color: #f8fafc; font-size: 10px; font-weight: bold; min-width: 24px; background: transparent; border: none;")
+        layout.addWidget(self.percent_label)
+
+        self.trans_slider.valueChanged.connect(self.on_slider_value_changed)
+
+        # 6-Second Auto-Hide Timer (when untouched / unhovered)
+        self.hide_timer = QTimer(self)
+        self.hide_timer.setInterval(6000)
+        self.hide_timer.setSingleShot(True)
+        self.hide_timer.timeout.connect(self.on_hide_timeout)
+
+    def on_slider_value_changed(self, val):
+        self.percent_label.setText(f"{val}%")
+        self.valueChanged.emit(val)
+        if self.parent_assistant and self.parent_assistant.is_transparent_mode:
+            self.hide_timer.start(6000)
+
+    def enterEvent(self, event):
+        self.hide_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self.parent_assistant and self.parent_assistant.is_transparent_mode:
+            self.hide_timer.start(6000)
+        super().leaveEvent(event)
+
+    def trigger_show(self):
+        if self.parent_assistant and self.parent_assistant.is_transparent_mode:
+            self.show()
+            self.hide_timer.start(6000)
+
+    def on_hide_timeout(self):
+        if not self.underMouse():
+            self.hide()
+
+
 # --- Floating Quick Action Tooltip (Explain / What / How) ---
 class SelectionActionPopup(QFrame):
     action_triggered = pyqtSignal(str, str)
@@ -371,6 +455,7 @@ class NativeAssistant(QMainWindow):
         self.client = None
         self.active_model_name = "gemini-flash-lite-latest"
         self.current_mode = "manual"
+        self.transparency_val = self.config.get("TRANSPARENCY", 65)
 
         self.selection_popup = SelectionActionPopup()
         self.selection_popup.action_triggered.connect(self.on_selection_action)
@@ -567,9 +652,10 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.scroll_area)
 
         # ==========================================
-        # 3. HELPER TEXT BAR
+        # 3. HELPER TEXT & BOTTOM-RIGHT HOVER SLIDER
         # ==========================================
         self.middle_helper_bar = QWidget()
+        self.middle_helper_bar.setObjectName("MiddleHelperBar")
         helper_layout = QHBoxLayout(self.middle_helper_bar)
         helper_layout.setContentsMargins(4, 0, 4, 0)
         helper_layout.setSpacing(8)
@@ -577,9 +663,15 @@ class NativeAssistant(QMainWindow):
         # Centered hint label with Space keycap style
         self.hint_label = QLabel("Press <span style='background:#1e293b; padding:1px 5px; border-radius:4px; border:1px solid #334155; font-family:Consolas,monospace; font-weight:bold; color:#f8fafc;'>Space</span> or the mic to start")
         self.hint_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignLeft)
+
         helper_layout.addStretch()
-        helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignCenter)
-        helper_layout.addStretch()
+
+        # Hover Slide Bar in bottom right above dock (visible for 6s when untouched / unhovered)
+        self.hover_slider = HoverSliderBox(parent_assistant=self)
+        self.hover_slider.valueChanged.connect(self.on_transparency_changed)
+        self.hover_slider.hide()
+        helper_layout.addWidget(self.hover_slider, alignment=Qt.AlignmentFlag.AlignRight)
 
         container_layout.addWidget(self.middle_helper_bar)
 
@@ -627,7 +719,6 @@ class NativeAssistant(QMainWindow):
         input_inner_layout.addWidget(self.send_btn)
 
         container_layout.addWidget(self.input_card)
-        self.input_card.hide()
 
         # ==========================================
         # 4. BOTTOM DOCK (Separated Floating Action Buttons)
@@ -695,7 +786,7 @@ class NativeAssistant(QMainWindow):
 
         # Message / Chat Focus Button
         self.chat_btn = QPushButton("💬")
-        self.chat_btn.setToolTip("Toggle Message Input")
+        self.chat_btn.setToolTip("Focus Message Input")
         self.chat_btn.setFixedSize(36, 36)
         self.chat_btn.setStyleSheet("""
             QPushButton {
@@ -709,7 +800,7 @@ class NativeAssistant(QMainWindow):
                 border-color: #475569;
             }
         """)
-        self.chat_btn.clicked.connect(self.toggle_input_card)
+        self.chat_btn.clicked.connect(lambda: self.text_input.setFocus())
         dock_layout.addWidget(self.chat_btn)
 
         dock_layout.addStretch()
@@ -728,14 +819,21 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.dock)
         self.setCentralWidget(self.main_container)
 
-        # Install event filters for smooth header/dock dragging
+        # Install event filters for smooth header/dock dragging & hover slider trigger
         self.header.installEventFilter(self)
         self.dock.installEventFilter(self)
         self.brand_label.installEventFilter(self)
+        self.middle_helper_bar.installEventFilter(self)
 
         self.add_message("Hi! I'm Aura. I can help you silently in all meetings, interviews, and code tasks.", is_user=False)
 
     def eventFilter(self, source, event):
+        if source == self.middle_helper_bar:
+            if event.type() == QEvent.Type.Enter:
+                if self.is_transparent_mode:
+                    self.hover_slider.trigger_show()
+            return False
+
         if source in (self.header, self.dock, self.brand_label):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -750,11 +848,22 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            self.main_container.setStyleSheet("""
-                QWidget#MainContainer {
-                    background-color: transparent;
-                    border: none;
-                }
+            if self.is_click_through:
+                bg_alpha = 0
+            else:
+                factor = self.transparency_val / 100.0
+                raw_alpha = int((1.0 - factor) * 240)
+                bg_alpha = max(8, raw_alpha)
+
+            border_alpha = max(0, min(200, int((1.0 - (self.transparency_val / 100.0)) * 180))) if not self.is_click_through else 0
+            border_style = f"1px solid rgba(51, 65, 85, {border_alpha})" if border_alpha > 20 else "none"
+
+            self.main_container.setStyleSheet(f"""
+                QWidget#MainContainer {{
+                    background-color: rgba(15, 23, 42, {bg_alpha});
+                    border: {border_style};
+                    border-radius: 14px;
+                }}
             """)
         else:
             self.main_container.setStyleSheet("""
@@ -764,6 +873,13 @@ class NativeAssistant(QMainWindow):
                     border-radius: 14px;
                 }
             """)
+
+    def on_transparency_changed(self, val):
+        self.transparency_val = val
+        self.config["TRANSPARENCY"] = val
+        save_config(self.config)
+        self.apply_container_style()
+        self.main_container.update()
 
     def set_mode(self, mode):
         self.current_mode = mode
@@ -822,12 +938,15 @@ class NativeAssistant(QMainWindow):
             if isinstance(widget, MessageBubble):
                 widget.apply_transparency(enabled)
         
-        # Synchronously toggle dynamic Type-through switch
+        # Synchronously toggle dynamic Type-through switch and hover slider
         if self.is_transparent_mode:
             self.type_through_switch.show()
             self.type_through_switch.set_checked(self.is_click_through)
+            self.hover_slider.trigger_show()
         else:
             self.type_through_switch.hide()
+            self.hover_slider.hide()
+            self.hover_slider.hide_timer.stop()
             if self.is_click_through:
                 self.set_type_through(False)
         
@@ -899,19 +1018,11 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
-    def toggle_input_card(self):
-        if self.input_card.isVisible():
-            self.input_card.hide()
-        else:
-            self.input_card.show()
-            self.text_input.setFocus()
-
     def send_text_prompt(self):
         text = self.text_input.text().strip()
         if not text:
             return
         self.text_input.clear()
-        self.input_card.hide()
         self.add_message(text, is_user=True)
 
         if not self.ai_ready:
