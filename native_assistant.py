@@ -216,44 +216,68 @@ class MessageBubble(QFrame):
         self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         
-        if is_user:
+        self.text_browser.selectionChanged.connect(self.on_selection_changed)
+        layout.addWidget(self.text_browser)
+        self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
+        self.update_content(text)
+
+    def apply_transparency(self, is_transparent):
+        if is_transparent:
+            # 100% transparent behind text: zero background and zero borders!
             self.setStyleSheet("""
                 QFrame {
-                    background-color: #1e293b;
-                    border: 1px solid #334155;
-                    border-radius: 10px;
-                    margin-left: 50px;
-                    margin-right: 2px;
+                    background-color: transparent;
+                    border: none;
+                    margin-left: 10px;
+                    margin-right: 10px;
                     margin-top: 2px;
                     margin-bottom: 2px;
+                }
+            """)
+            self.text_browser.setStyleSheet("""
+                QTextBrowser {
+                    background: transparent;
+                    border: none;
+                    color: #ffffff;
+                    font-size: 13.5px;
+                    font-weight: 500;
+                    font-family: 'Segoe UI', -apple-system, sans-serif;
                 }
             """)
         else:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #182234;
-                    border: 1px solid #1e293b;
-                    border-radius: 10px;
-                    margin-right: 30px;
-                    margin-left: 2px;
-                    margin-top: 2px;
-                    margin-bottom: 2px;
+            if self.is_user:
+                self.setStyleSheet("""
+                    QFrame {
+                        background-color: #1e293b;
+                        border: 1px solid #334155;
+                        border-radius: 10px;
+                        margin-left: 50px;
+                        margin-right: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                    }
+                """)
+            else:
+                self.setStyleSheet("""
+                    QFrame {
+                        background-color: #182234;
+                        border: 1px solid #1e293b;
+                        border-radius: 10px;
+                        margin-right: 30px;
+                        margin-left: 2px;
+                        margin-top: 2px;
+                        margin-bottom: 2px;
+                    }
+                """)
+            self.text_browser.setStyleSheet("""
+                QTextBrowser {
+                    background: transparent;
+                    border: none;
+                    color: #f1f5f9;
+                    font-size: 13px;
+                    font-family: 'Segoe UI', -apple-system, sans-serif;
                 }
             """)
-            
-        self.text_browser.setStyleSheet("""
-            QTextBrowser {
-                background: transparent;
-                border: none;
-                color: #f1f5f9;
-                font-size: 13px;
-                font-family: 'Segoe UI', -apple-system, sans-serif;
-            }
-        """)
-
-        self.text_browser.selectionChanged.connect(self.on_selection_changed)
-        layout.addWidget(self.text_browser)
-        self.update_content(text)
 
     def on_selection_changed(self):
         selected = self.text_browser.textCursor().selectedText().strip()
@@ -723,6 +747,13 @@ class NativeAssistant(QMainWindow):
         self.is_transparent_mode = enabled
         self.trans_switch.set_checked(enabled)
         self.apply_container_style()
+        
+        # Dynamically update all message bubbles (remove background/borders in Transparent mode)
+        for i in range(self.chat_layout.count()):
+            item = self.chat_layout.itemAt(i)
+            widget = item.widget() if item else None
+            if isinstance(widget, MessageBubble):
+                widget.apply_transparency(enabled)
         
         # Show Type-through switch ONLY in Transparent mode
         if self.is_transparent_mode:
