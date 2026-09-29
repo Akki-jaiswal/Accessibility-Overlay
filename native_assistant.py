@@ -573,7 +573,7 @@ class NativeAssistant(QMainWindow):
         slider_inner.addWidget(self.slider_icon)
 
         self.trans_slider = QSlider(Qt.Orientation.Horizontal)
-        self.trans_slider.setRange(15, 100)
+        self.trans_slider.setRange(0, 100)
         self.trans_slider.setValue(self.opacity_val)
         self.trans_slider.setFixedWidth(80)
         self.trans_slider.setStyleSheet("""
@@ -753,12 +753,14 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            # Opacity governed by slider
-            alpha = int(255 * (self.opacity_val / 100.0) * 0.1)  # Ultra-subtle or 0
+            # 0% opacity = 0 alpha (completely transparent); 100% = 0.95 alpha (dark solid)
+            alpha = (self.opacity_val / 100.0) * 0.95
+            border_style = f"1px solid rgba(51, 65, 85, {alpha:.2f})" if alpha > 0.15 else "none"
             self.main_container.setStyleSheet(f"""
                 QWidget#MainContainer {{
-                    background-color: rgba(15, 23, 42, {alpha});
-                    border: none;
+                    background-color: rgba(15, 23, 42, {alpha:.3f});
+                    border: {border_style};
+                    border-radius: 14px;
                 }}
             """)
         else:
@@ -845,8 +847,17 @@ class NativeAssistant(QMainWindow):
     def set_type_through(self, enabled):
         self.is_click_through = enabled
         self.type_through_switch.set_checked(enabled)
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
-        self.show()
+        
+        # Make the middle scroll area and chat transparent to mouse clicks
+        self.scroll_area.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        self.chat_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        
+        # Header, dock, and toggle switch remain 100% clickable so you can turn it off anytime!
+        for i in range(self.chat_layout.count()):
+            item = self.chat_layout.itemAt(i)
+            widget = item.widget() if item else None
+            if widget:
+                widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
 
     def toggle_type_through_global(self):
         if self.is_transparent_mode:
