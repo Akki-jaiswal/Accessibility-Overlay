@@ -800,17 +800,23 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            # 0% slider = 0% transparency (solid dark, alpha = 0.95)
-            # 100% slider = 100% transparency (fully clear/invisible, alpha = 0.0)
+            # 0% slider = 0% transparency (solid dark, alpha = 240)
+            # 100% slider = 100% transparency (fully clear/invisible)
             transparency_factor = self.opacity_val / 100.0
-            alpha = (1.0 - transparency_factor) * 0.95
-            border_alpha = max(0.0, min(1.0, alpha * 0.8))
-            border_style = f"1px solid rgba(51, 65, 85, {border_alpha:.2f})" if alpha > 0.1 else "none"
-            # Keep a tiny non-zero alpha (0.003) so Windows DWM treats it as a hit-testable window when Type-through is OFF
-            effective_alpha = max(0.003, alpha)
+            raw_alpha = int((1.0 - transparency_factor) * 240)
+            
+            # When Type-Through is OFF, enforce minimum alpha of 8 so Windows OS never allows clicks to leak to background apps
+            if not self.is_click_through:
+                effective_alpha = max(8, raw_alpha)
+            else:
+                effective_alpha = raw_alpha
+            
+            border_alpha = max(0, min(200, int((1.0 - transparency_factor) * 180)))
+            border_style = f"1px solid rgba(51, 65, 85, {border_alpha})" if border_alpha > 20 else "none"
+            
             self.main_container.setStyleSheet(f"""
                 QWidget#MainContainer {{
-                    background-color: rgba(15, 23, 42, {effective_alpha:.3f});
+                    background-color: rgba(15, 23, 42, {effective_alpha});
                     border: {border_style};
                     border-radius: 14px;
                 }}
@@ -818,7 +824,7 @@ class NativeAssistant(QMainWindow):
         else:
             self.main_container.setStyleSheet("""
                 QWidget#MainContainer {
-                    background-color: rgba(15, 23, 42, 0.96);
+                    background-color: rgba(15, 23, 42, 245);
                     border: 1px solid #334155;
                     border-radius: 14px;
                 }
@@ -929,7 +935,9 @@ class NativeAssistant(QMainWindow):
                     if widget.text_browser.viewport():
                         widget.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         
+        self.apply_container_style()
         self.main_container.update()
+        self.update()
 
     def toggle_type_through_global(self):
         if self.is_transparent_mode:
