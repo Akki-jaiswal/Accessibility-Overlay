@@ -238,6 +238,8 @@ class MessageBubble(QFrame):
         if parent_assistant and parent_assistant.is_click_through:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
             self.text_browser.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            if self.text_browser.viewport():
+                self.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         self.update_content(text)
@@ -798,13 +800,17 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            # 0% opacity = 0 alpha (completely transparent); 100% = 0.95 alpha (dark solid)
-            alpha = (self.opacity_val / 100.0) * 0.95
-            border_alpha = max(0.0, min(1.0, (self.opacity_val / 100.0) * 0.8))
-            border_style = f"1px solid rgba(51, 65, 85, {border_alpha:.2f})" if self.opacity_val > 5 else "none"
+            # 0% slider = 0% transparency (solid dark, alpha = 0.95)
+            # 100% slider = 100% transparency (fully clear/invisible, alpha = 0.0)
+            transparency_factor = self.opacity_val / 100.0
+            alpha = (1.0 - transparency_factor) * 0.95
+            border_alpha = max(0.0, min(1.0, alpha * 0.8))
+            border_style = f"1px solid rgba(51, 65, 85, {border_alpha:.2f})" if alpha > 0.1 else "none"
+            # Keep a tiny non-zero alpha (0.003) so Windows DWM treats it as a hit-testable window when Type-through is OFF
+            effective_alpha = max(0.003, alpha)
             self.main_container.setStyleSheet(f"""
                 QWidget#MainContainer {{
-                    background-color: rgba(15, 23, 42, {alpha:.3f});
+                    background-color: rgba(15, 23, 42, {effective_alpha:.3f});
                     border: {border_style};
                     border-radius: 14px;
                 }}
@@ -908,6 +914,8 @@ class NativeAssistant(QMainWindow):
         
         # Make the middle scroll area and chat transparent to mouse clicks
         self.scroll_area.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        if self.scroll_area.viewport():
+            self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         self.chat_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         
         # Header, dock, and toggle switch remain 100% clickable so you can turn it off anytime!
@@ -916,6 +924,10 @@ class NativeAssistant(QMainWindow):
             widget = item.widget() if item else None
             if widget:
                 widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+                if hasattr(widget, 'text_browser'):
+                    widget.text_browser.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+                    if widget.text_browser.viewport():
+                        widget.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
         
         self.main_container.update()
 
