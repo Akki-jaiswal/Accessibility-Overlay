@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect, QInputDialog,
     QSizePolicy, QSlider
 )
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice, QEvent
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction, QCursor
 from PIL import Image
 
@@ -73,9 +73,11 @@ class WorkerSignals(QObject):
     show_window_signal = pyqtSignal()
     toggle_window_signal = pyqtSignal()
     trigger_camera_signal = pyqtSignal()
+    transparency_toggled_signal = pyqtSignal(bool)
+    type_through_toggled_signal = pyqtSignal(bool)
 
 
-# --- Toggle Switch with Label Below ---
+# --- Toggle Switch with Label Below & Full Hit Area ---
 class CompactToggleSwitch(QWidget):
     toggled = pyqtSignal(bool)
 
@@ -83,24 +85,34 @@ class CompactToggleSwitch(QWidget):
         super().__init__(parent)
         self.is_checked = is_checked
         self.label_text = label_text
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(4, 2, 4, 2)
         layout.setSpacing(2)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Pill switch
+        # Pill switch representation
         self.switch_btn = QPushButton()
-        self.switch_btn.setFixedSize(30, 16)
+        self.switch_btn.setFixedSize(32, 18)
         self.switch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.switch_btn.clicked.connect(self.toggle)
+        self.switch_btn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.switch_btn, alignment=Qt.AlignmentFlag.AlignCenter)
 
         # Label underneath
         self.label = QLabel(label_text)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.label, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.update_style()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.toggle()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
 
     def toggle(self):
         self.is_checked = not self.is_checked
@@ -108,8 +120,9 @@ class CompactToggleSwitch(QWidget):
         self.toggled.emit(self.is_checked)
 
     def set_checked(self, checked):
-        self.is_checked = checked
-        self.update_style()
+        if self.is_checked != checked:
+            self.is_checked = checked
+            self.update_style()
 
     def update_style(self):
         if self.is_checked:
@@ -117,7 +130,7 @@ class CompactToggleSwitch(QWidget):
                 QPushButton {
                     background-color: #3b82f6;
                     border: 1px solid #60a5fa;
-                    border-radius: 8px;
+                    border-radius: 9px;
                 }
             """)
             self.label.setStyleSheet("color: #38bdf8; font-size: 10px; font-weight: 600;")
@@ -126,7 +139,7 @@ class CompactToggleSwitch(QWidget):
                 QPushButton {
                     background-color: #334155;
                     border: 1px solid #475569;
-                    border-radius: 8px;
+                    border-radius: 9px;
                 }
             """)
             self.label.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 500;")
@@ -204,20 +217,28 @@ class MessageBubble(QFrame):
         layout.setSpacing(3)
 
         if is_image and pixmap:
-            img_label = QLabel()
+            self.img_label = QLabel()
             scaled_pixmap = pixmap.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation)
-            img_label.setPixmap(scaled_pixmap)
-            img_label.setStyleSheet("border-radius: 6px; margin-bottom: 4px;")
-            layout.addWidget(img_label)
+            self.img_label.setPixmap(scaled_pixmap)
+            self.img_label.setStyleSheet("border-radius: 6px; margin-bottom: 4px;")
+            layout.addWidget(self.img_label)
 
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setReadOnly(True)
         self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.text_browser.viewport().setAutoFillBackground(False)
+        self.text_browser.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         
         self.text_browser.selectionChanged.connect(self.on_selection_changed)
         layout.addWidget(self.text_browser)
+
+        # Set transparent mouse events if parent is in type-through mode
+        if parent_assistant and parent_assistant.is_click_through:
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            self.text_browser.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         self.update_content(text)
 
@@ -227,8 +248,8 @@ class MessageBubble(QFrame):
                 QFrame {
                     background-color: transparent;
                     border: none;
-                    margin-left: 6px;
-                    margin-right: 6px;
+                    margin-left: 4px;
+                    margin-right: 4px;
                     margin-top: 2px;
                     margin-bottom: 2px;
                 }
@@ -277,6 +298,7 @@ class MessageBubble(QFrame):
                     font-family: 'Segoe UI', -apple-system, sans-serif;
                 }
             """)
+        self.update()
 
     def on_selection_changed(self):
         selected = self.text_browser.textCursor().selectedText().strip()
@@ -335,7 +357,7 @@ class NativeAssistant(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.oldPos = None
+        self.drag_position = None
         self.is_transparent_mode = False
         self.is_click_through = False
         self.is_listening = False
@@ -364,6 +386,8 @@ class NativeAssistant(QMainWindow):
         self.signals.show_window_signal.connect(self.show_and_activate)
         self.signals.toggle_window_signal.connect(self.toggle_visibility)
         self.signals.trigger_camera_signal.connect(self.capture_screen_and_analyze)
+        self.signals.transparency_toggled_signal.connect(self.set_transparency)
+        self.signals.type_through_toggled_signal.connect(self.set_type_through)
 
     def init_ai(self):
         api_key = self.config.get("GEMINI_API_KEY", "")
@@ -389,11 +413,12 @@ class NativeAssistant(QMainWindow):
         self.main_container.setObjectName("MainContainer")
         self.apply_container_style()
 
-        shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(24)
-        shadow.setColor(QColor(0, 0, 0, 220))
-        shadow.setOffset(0, 6)
-        self.main_container.setGraphicsEffect(shadow)
+        # Shadow effect (disabled during transparent mode to prevent dark murky boxes)
+        self.shadow_effect = QGraphicsDropShadowEffect(self)
+        self.shadow_effect.setBlurRadius(24)
+        self.shadow_effect.setColor(QColor(0, 0, 0, 220))
+        self.shadow_effect.setOffset(0, 6)
+        self.main_container.setGraphicsEffect(self.shadow_effect)
 
         container_layout = QVBoxLayout(self.main_container)
         container_layout.setContentsMargins(14, 10, 14, 12)
@@ -403,6 +428,7 @@ class NativeAssistant(QMainWindow):
         # 1. TOP HEADER BAR
         # ==========================================
         self.header = QWidget()
+        self.header.setObjectName("HeaderWidget")
         header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
@@ -655,6 +681,7 @@ class NativeAssistant(QMainWindow):
         # 4. BOTTOM DOCK (Separated Floating Action Buttons)
         # ==========================================
         self.dock = QWidget()
+        self.dock.setObjectName("DockWidget")
         dock_layout = QHBoxLayout(self.dock)
         dock_layout.setContentsMargins(0, 2, 0, 0)
         dock_layout.setSpacing(8)
@@ -749,13 +776,32 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.dock)
         self.setCentralWidget(self.main_container)
 
+        # Install event filters for smooth header/dock dragging
+        self.header.installEventFilter(self)
+        self.dock.installEventFilter(self)
+        self.brand_label.installEventFilter(self)
+
         self.add_message("Hi! I'm Aura. I can help you silently in all meetings, interviews, and code tasks.", is_user=False)
+
+    def eventFilter(self, source, event):
+        if source in (self.header, self.dock, self.brand_label):
+            if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                return False
+            elif event.type() == QEvent.Type.MouseMove and self.drag_position is not None and event.buttons() == Qt.MouseButton.LeftButton:
+                self.move(event.globalPosition().toPoint() - self.drag_position)
+                return True
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self.drag_position = None
+                return False
+        return super().eventFilter(source, event)
 
     def apply_container_style(self):
         if self.is_transparent_mode:
             # 0% opacity = 0 alpha (completely transparent); 100% = 0.95 alpha (dark solid)
             alpha = (self.opacity_val / 100.0) * 0.95
-            border_style = f"1px solid rgba(51, 65, 85, {alpha:.2f})" if alpha > 0.15 else "none"
+            border_alpha = max(0.0, min(1.0, (self.opacity_val / 100.0) * 0.8))
+            border_style = f"1px solid rgba(51, 65, 85, {border_alpha:.2f})" if self.opacity_val > 5 else "none"
             self.main_container.setStyleSheet(f"""
                 QWidget#MainContainer {{
                     background-color: rgba(15, 23, 42, {alpha:.3f});
@@ -778,6 +824,7 @@ class NativeAssistant(QMainWindow):
         self.config["TRANSPARENCY"] = val
         save_config(self.config)
         self.apply_container_style()
+        self.main_container.update()
 
     def set_mode(self, mode):
         self.current_mode = mode
@@ -824,14 +871,21 @@ class NativeAssistant(QMainWindow):
     def set_transparency(self, enabled):
         self.is_transparent_mode = enabled
         self.trans_switch.set_checked(enabled)
+        
+        # Disable drop shadow in transparent mode for pristine clarity
+        if hasattr(self, 'shadow_effect'):
+            self.shadow_effect.setEnabled(not enabled)
+
         self.apply_container_style()
         
+        # Synchronously update all message bubbles
         for i in range(self.chat_layout.count()):
             item = self.chat_layout.itemAt(i)
             widget = item.widget() if item else None
             if isinstance(widget, MessageBubble):
                 widget.apply_transparency(enabled)
         
+        # Synchronously toggle dynamic controls
         if self.is_transparent_mode:
             self.type_through_switch.show()
             self.slider_box.show()
@@ -840,9 +894,13 @@ class NativeAssistant(QMainWindow):
             self.slider_box.hide()
             if self.is_click_through:
                 self.set_type_through(False)
+        
+        self.main_container.update()
+        self.update()
+        QApplication.processEvents()
 
     def toggle_transparency(self):
-        self.set_transparency(not self.is_transparent_mode)
+        self.signals.transparency_toggled_signal.emit(not self.is_transparent_mode)
 
     def set_type_through(self, enabled):
         self.is_click_through = enabled
@@ -858,10 +916,12 @@ class NativeAssistant(QMainWindow):
             widget = item.widget() if item else None
             if widget:
                 widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        
+        self.main_container.update()
 
     def toggle_type_through_global(self):
         if self.is_transparent_mode:
-            self.set_type_through(not self.is_click_through)
+            self.signals.type_through_toggled_signal.emit(not self.is_click_through)
 
     def prompt_persona(self):
         persona, ok = QInputDialog.getMultiLineText(
@@ -1103,16 +1163,14 @@ class NativeAssistant(QMainWindow):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self.oldPos = event.globalPosition().toPoint()
+            self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
 
     def mouseMoveEvent(self, event):
-        if self.oldPos is not None:
-            delta = event.globalPosition().toPoint() - self.oldPos
-            self.move(self.x() + delta.x(), self.y() + delta.y())
-            self.oldPos = event.globalPosition().toPoint()
+        if self.drag_position is not None and event.buttons() == Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self.drag_position)
 
     def mouseReleaseEvent(self, event):
-        self.oldPos = None
+        self.drag_position = None
 
     def setup_hotkeys(self):
         if KEYBOARD_AVAILABLE:
