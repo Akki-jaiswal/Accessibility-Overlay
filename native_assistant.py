@@ -8,9 +8,9 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QScrollArea, QFrame, QTextBrowser,
     QSystemTrayIcon, QMenu, QGraphicsDropShadowEffect, QInputDialog,
-    QDialog, QTextEdit, QMenu as QContextMenu
+    QSizePolicy
 )
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice, QRect
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction, QCursor
 from PIL import Image
 
@@ -69,15 +69,71 @@ class WorkerSignals(QObject):
     stream_chunk = pyqtSignal(str)
     stream_finished = pyqtSignal()
     voice_transcribed = pyqtSignal(str)
-    status_updated = pyqtSignal(str, str)
     show_window_signal = pyqtSignal()
     toggle_window_signal = pyqtSignal()
     trigger_camera_signal = pyqtSignal()
 
 
+# --- Minimalist Toggle Switch with Label Underneath ---
+class CompactToggleSwitch(QWidget):
+    toggled = pyqtSignal(bool)
+
+    def __init__(self, label_text, is_checked=False, parent=None):
+        super().__init__(parent)
+        self.is_checked = is_checked
+        self.label_text = label_text
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Switch pill button
+        self.switch_btn = QPushButton()
+        self.switch_btn.setFixedSize(32, 16)
+        self.switch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.switch_btn.clicked.connect(self.toggle)
+        layout.addWidget(self.switch_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        # Text label underneath
+        self.label = QLabel(label_text)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.label, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        self.update_style()
+
+    def toggle(self):
+        self.is_checked = not self.is_checked
+        self.update_style()
+        self.toggled.emit(self.is_checked)
+
+    def set_checked(self, checked):
+        self.is_checked = checked
+        self.update_style()
+
+    def update_style(self):
+        if self.is_checked:
+            self.switch_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #3b82f6;
+                    border: 1px solid #60a5fa;
+                    border-radius: 8px;
+                }
+            """)
+            self.label.setStyleSheet("color: #38bdf8; font-size: 10px; font-weight: 600;")
+        else:
+            self.switch_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #334155;
+                    border: 1px solid #475569;
+                    border-radius: 8px;
+                }
+            """)
+            self.label.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 500;")
+
+
 # --- Floating Quick Action Tooltip (Explain / What / How) ---
 class SelectionActionPopup(QFrame):
-    action_triggered = pyqtSignal(str, str)  # (action_type, selected_text)
+    action_triggered = pyqtSignal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -131,6 +187,7 @@ class SelectionActionPopup(QFrame):
         self.action_triggered.emit(prompt_prefix, full_prompt)
 
 
+# --- Dynamic Content-Adaptive Message Bubble ---
 class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, is_image=False, pixmap=None, parent_assistant=None):
         super().__init__(parent_assistant)
@@ -139,13 +196,16 @@ class MessageBubble(QFrame):
         self.raw_text = text
         self.is_user = is_user
         
+        # Adaptive content sizing
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(4)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(3)
 
         if is_image and pixmap:
             img_label = QLabel()
-            scaled_pixmap = pixmap.scaledToWidth(260, Qt.TransformationMode.SmoothTransformation)
+            scaled_pixmap = pixmap.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation)
             img_label.setPixmap(scaled_pixmap)
             img_label.setStyleSheet("border-radius: 6px; margin-bottom: 4px;")
             layout.addWidget(img_label)
@@ -161,8 +221,8 @@ class MessageBubble(QFrame):
                 QFrame {
                     background-color: #1e293b;
                     border: 1px solid #334155;
-                    border-radius: 12px;
-                    margin-left: 60px;
+                    border-radius: 10px;
+                    margin-left: 50px;
                     margin-right: 2px;
                     margin-top: 2px;
                     margin-bottom: 2px;
@@ -173,8 +233,8 @@ class MessageBubble(QFrame):
                 QFrame {
                     background-color: #182234;
                     border: 1px solid #1e293b;
-                    border-radius: 12px;
-                    margin-right: 40px;
+                    border-radius: 10px;
+                    margin-right: 30px;
                     margin-left: 2px;
                     margin-top: 2px;
                     margin-bottom: 2px;
@@ -186,14 +246,12 @@ class MessageBubble(QFrame):
                 background: transparent;
                 border: none;
                 color: #f1f5f9;
-                font-size: 13.5px;
+                font-size: 13px;
                 font-family: 'Segoe UI', -apple-system, sans-serif;
             }
         """)
 
-        # Listen for selection to show [ Explain | What | How ] popup
         self.text_browser.selectionChanged.connect(self.on_selection_changed)
-            
         layout.addWidget(self.text_browser)
         self.update_content(text)
 
@@ -215,14 +273,14 @@ class MessageBubble(QFrame):
         
         styled_html = f"""
         <style>
-            body {{ color: #f1f5f9; font-family: 'Segoe UI', sans-serif; font-size: 13.5px; line-height: 1.5; margin: 0; padding: 0; }}
-            p {{ margin: 0 0 6px 0; }}
+            body {{ color: #f1f5f9; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; }}
+            p {{ margin: 0 0 5px 0; }}
             strong {{ color: #38bdf8; font-weight: 600; }}
-            h1, h2, h3, h4 {{ color: #60a5fa; margin: 6px 0 3px 0; font-size: 14px; font-weight: bold; }}
-            ul, ol {{ margin: 0 0 6px 16px; padding: 0; }}
-            li {{ margin-bottom: 3px; }}
-            code {{ background-color: #0b1120; color: #7dd3fc; padding: 1px 4px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12.5px; }}
-            pre {{ background-color: #0b1120; padding: 8px; border-radius: 6px; border: 1px solid #1e293b; margin: 4px 0; }}
+            h1, h2, h3, h4 {{ color: #60a5fa; margin: 5px 0 3px 0; font-size: 13.5px; font-weight: bold; }}
+            ul, ol {{ margin: 0 0 5px 14px; padding: 0; }}
+            li {{ margin-bottom: 2px; }}
+            code {{ background-color: #0b1120; color: #7dd3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
+            pre {{ background-color: #0b1120; padding: 6px; border-radius: 5px; border: 1px solid #1e293b; margin: 3px 0; }}
         </style>
         {html}
         """
@@ -240,16 +298,16 @@ class MessageBubble(QFrame):
 
     def adjust_height(self):
         doc = self.text_browser.document()
-        doc.setTextWidth(380)
-        h = int(doc.size().height()) + 14
-        self.text_browser.setFixedHeight(max(24, h))
+        doc.setTextWidth(360)
+        h = int(doc.size().height()) + 8
+        self.text_browser.setFixedHeight(max(18, h))
 
 
 class NativeAssistant(QMainWindow):
     SIZES = [
-        (480, 680),  # Stage 0: Default
-        (620, 780),  # Stage 1: Expanded
-        (760, 880)   # Stage 2: Wide
+        (460, 640),  # Stage 0: Compact Default
+        (600, 760),  # Stage 1: Expanded
+        (740, 860)   # Stage 2: Wide
     ]
 
     def __init__(self):
@@ -258,6 +316,7 @@ class NativeAssistant(QMainWindow):
         self.is_transparent_mode = False
         self.is_click_through = False
         self.is_listening = False
+        self.is_auto_running = False
         self.current_size_index = 0
         self.signals = WorkerSignals()
         self.current_ai_bubble = None
@@ -266,7 +325,6 @@ class NativeAssistant(QMainWindow):
         self.active_model_name = "gemini-flash-lite-latest"
         self.current_mode = "manual"
 
-        # Floating quick-action selection popup
         self.selection_popup = SelectionActionPopup()
         self.selection_popup.action_triggered.connect(self.on_selection_action)
 
@@ -301,36 +359,41 @@ class NativeAssistant(QMainWindow):
         
         w, h = self.SIZES[0]
         self.resize(w, h)
-        self.setMinimumSize(360, 480)
+        self.setMinimumSize(340, 440)
 
-        # Main container with Angel-style dark navy surface
         self.main_container = QWidget(self)
         self.main_container.setObjectName("MainContainer")
         self.apply_container_style()
 
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(24)
+        shadow.setBlurRadius(20)
         shadow.setColor(QColor(0, 0, 0, 220))
-        shadow.setOffset(0, 8)
+        shadow.setOffset(0, 6)
         self.main_container.setGraphicsEffect(shadow)
 
         container_layout = QVBoxLayout(self.main_container)
-        container_layout.setContentsMargins(14, 10, 14, 12)
-        container_layout.setSpacing(8)
+        container_layout.setContentsMargins(12, 8, 12, 10)
+        container_layout.setSpacing(6)
 
         # ==========================================
-        # 1. TOP HEADER (Back, Mode Switch, Logo, Window Controls)
+        # 1. TOP HEADER (Bold Back, Pill Switch, Brand Logo, Window Controls)
         # ==========================================
         self.header = QWidget()
         header_layout = QHBoxLayout(self.header)
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
 
-        # Back Button
+        # Bold & Larger Back Arrow
         self.back_btn = QPushButton("←")
-        self.back_btn.setFixedSize(24, 24)
+        self.back_btn.setFixedSize(26, 26)
         self.back_btn.setStyleSheet("""
-            QPushButton { background: transparent; border: none; color: #94a3b8; font-size: 14px; font-weight: bold; }
+            QPushButton {
+                background: transparent;
+                border: none;
+                color: #94a3b8;
+                font-size: 16px;
+                font-weight: 900;
+            }
             QPushButton:hover { color: #f8fafc; }
         """)
         header_layout.addWidget(self.back_btn)
@@ -386,9 +449,8 @@ class NativeAssistant(QMainWindow):
         mode_layout.addWidget(self.auto_btn)
         header_layout.addWidget(self.mode_container)
 
-        # Settings/Filter icon next to pill
         self.filter_btn = QPushButton("🎛️")
-        self.filter_btn.setToolTip("Customize Persona & System Prompt")
+        self.filter_btn.setToolTip("Customize Persona & Background Prompt")
         self.filter_btn.setFixedSize(24, 24)
         self.filter_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 12px; } QPushButton:hover { background: #334155; border-radius: 4px; }")
         self.filter_btn.clicked.connect(self.prompt_persona)
@@ -396,8 +458,8 @@ class NativeAssistant(QMainWindow):
 
         header_layout.addStretch()
 
-        # Center Brand Logo: 🪽 Angel
-        self.brand_label = QLabel("🪽 Angel")
+        # Clean, Subtle Brand Logo (⚡ Aura)
+        self.brand_label = QLabel("⚡ Aura")
         self.brand_label.setStyleSheet("color: #cbd5e1; font-size: 13px; font-weight: bold; font-family: 'Segoe UI', sans-serif;")
         header_layout.addWidget(self.brand_label)
 
@@ -447,7 +509,7 @@ class NativeAssistant(QMainWindow):
         self.chat_widget.setStyleSheet("background: transparent;")
         self.chat_layout = QVBoxLayout(self.chat_widget)
         self.chat_layout.setContentsMargins(0, 0, 0, 0)
-        self.chat_layout.setSpacing(6)
+        self.chat_layout.setSpacing(4)
         self.chat_layout.addStretch()
 
         self.scroll_area.setWidget(self.chat_widget)
@@ -507,14 +569,14 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.input_card)
 
         # ==========================================
-        # 4. BOTTOM DOCK (Settings, Center Actions, Transparency Toggle)
+        # 4. BOTTOM DOCK (Settings, Center Actions, Vertical Toggle Switches)
         # ==========================================
         self.dock = QWidget()
         dock_layout = QHBoxLayout(self.dock)
         dock_layout.setContentsMargins(0, 2, 0, 0)
         dock_layout.setSpacing(8)
 
-        # Left: ⚙️ Settings + Status Badge
+        # Left: ⚙️ Settings
         self.key_btn = QPushButton("⚙️")
         self.key_btn.setToolTip("Settings / Gemini API Key")
         self.key_btn.setFixedSize(30, 30)
@@ -524,10 +586,6 @@ class NativeAssistant(QMainWindow):
         """)
         self.key_btn.clicked.connect(self.prompt_api_key)
         dock_layout.addWidget(self.key_btn)
-
-        self.status_pill = QLabel("● Active")
-        self.status_pill.setStyleSheet("background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; padding: 2px 8px; font-size: 11px;")
-        dock_layout.addWidget(self.status_pill)
 
         dock_layout.addStretch()
 
@@ -557,7 +615,7 @@ class NativeAssistant(QMainWindow):
 
         # 🎙️ Blue Highlight Mic Button
         self.voice_btn = QPushButton("🎙️")
-        self.voice_btn.setToolTip("Voice Dictation (Ctrl+Shift+V)")
+        self.voice_btn.setToolTip("Voice Dictation (Press Space when focused, or Ctrl+Shift+V)")
         self.voice_btn.setFixedSize(32, 32)
         self.voice_btn.setStyleSheet("""
             QPushButton { background-color: #2563eb; color: white; border: none; border-radius: 16px; font-size: 14px; }
@@ -576,7 +634,7 @@ class NativeAssistant(QMainWindow):
 
         # ➕ Attach / Context
         self.add_btn = QPushButton("➕")
-        self.add_btn.setToolTip("Add Context")
+        self.add_btn.setToolTip("Customize Persona")
         self.add_btn.setFixedSize(30, 30)
         self.add_btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 13px; } QPushButton:hover { background-color: #334155; border-radius: 15px; }")
         self.add_btn.clicked.connect(self.prompt_persona)
@@ -585,32 +643,21 @@ class NativeAssistant(QMainWindow):
         dock_layout.addWidget(self.center_dock)
         dock_layout.addStretch()
 
-        # Right: Click-Through Toggle + Transparent Switch
-        self.clickthrough_btn = QPushButton("↖ Type-through")
-        self.clickthrough_btn.setCheckable(True)
-        self.clickthrough_btn.setToolTip("Allow clicks/typing to pass through to apps underneath")
-        self.clickthrough_btn.setStyleSheet("""
-            QPushButton { background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; font-size: 11px; padding: 3px 8px; }
-            QPushButton:hover { color: #f8fafc; }
-        """)
-        self.clickthrough_btn.clicked.connect(self.toggle_click_through)
-        dock_layout.addWidget(self.clickthrough_btn)
+        # Right: Type-through Switch (Hidden by default, shown ONLY in transparent mode)
+        self.type_through_switch = CompactToggleSwitch("Type-through", is_checked=False)
+        self.type_through_switch.toggled.connect(self.set_type_through)
+        self.type_through_switch.hide()  # Only visible when Transparent is active
+        dock_layout.addWidget(self.type_through_switch)
 
-        self.trans_btn = QPushButton("⚪ Transparent")
-        self.trans_btn.setCheckable(True)
-        self.trans_btn.setToolTip("Toggle 100% Transparent Wallpaper HUD (Ctrl+G)")
-        self.trans_btn.setStyleSheet("""
-            QPushButton { background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; font-size: 11px; padding: 3px 8px; }
-            QPushButton:hover { color: #38bdf8; }
-        """)
-        self.trans_btn.clicked.connect(self.toggle_transparency)
-        dock_layout.addWidget(self.trans_btn)
+        # Right: Transparent Switch (Vertical toggle switch with label below)
+        self.trans_switch = CompactToggleSwitch("Transparent", is_checked=False)
+        self.trans_switch.toggled.connect(self.set_transparency)
+        dock_layout.addWidget(self.trans_switch)
 
         container_layout.addWidget(self.dock)
         self.setCentralWidget(self.main_container)
 
-        # Initial clean greeting matching Angel
-        self.add_message("Hi! I'm Angel. I can help you silently in all online meetings and interviews.", is_user=False)
+        self.add_message("Hi! I'm Aura. I can help you silently in all meetings, interviews, and code tasks.", is_user=False)
 
     def apply_container_style(self):
         if self.is_transparent_mode:
@@ -636,45 +683,73 @@ class NativeAssistant(QMainWindow):
             self.manual_btn.setStyleSheet("background-color: #334155; color: #ffffff; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.auto_btn.setChecked(False)
             self.auto_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
+            self.is_auto_running = False
         else:
             self.auto_btn.setChecked(True)
             self.auto_btn.setStyleSheet("background-color: #10b981; color: #ffffff; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.manual_btn.setChecked(False)
             self.manual_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
+            self.start_auto_mode()
+
+    def start_auto_mode(self):
+        self.is_auto_running = True
+        threading.Thread(target=self._auto_listener_loop, daemon=True).start()
+
+    def _auto_listener_loop(self):
+        # Auto Mode: Continuously monitors desktop/speaker audio stream
+        if not SPEECH_AVAILABLE:
+            return
+        r = sr.Recognizer()
+        r.pause_threshold = 1.0
+        r.dynamic_energy_threshold = True
+
+        while self.is_auto_running and self.current_mode == "auto":
+            try:
+                with sr.Microphone() as src:
+                    r.adjust_for_ambient_noise(src, duration=0.2)
+                    audio = r.listen(src, timeout=4, phrase_time_limit=15)
+                text = r.recognize_google(audio)
+                if text and self.is_auto_running:
+                    self.signals.voice_transcribed.emit(text)
+            except Exception:
+                time.sleep(0.5)
 
     def cycle_window_size(self):
         self.current_size_index = (self.current_size_index + 1) % len(self.SIZES)
         w, h = self.SIZES[self.current_size_index]
         self.resize(w, h)
 
-    def toggle_transparency(self):
-        self.is_transparent_mode = not self.is_transparent_mode
+    def set_transparency(self, enabled):
+        self.is_transparent_mode = enabled
+        self.trans_switch.set_checked(enabled)
+        self.apply_container_style()
+        
+        # Show Type-through switch ONLY in Transparent mode
         if self.is_transparent_mode:
-            self.trans_btn.setText("🔵 Transparent")
-            self.trans_btn.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; border-radius: 12px; font-size: 11px; padding: 3px 8px;")
-            self.apply_container_style()
+            self.type_through_switch.show()
         else:
-            self.trans_btn.setText("⚪ Transparent")
-            self.trans_btn.setStyleSheet("background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; font-size: 11px; padding: 3px 8px;")
-            self.apply_container_style()
+            self.type_through_switch.hide()
+            if self.is_click_through:
+                self.set_type_through(False)
 
-    def toggle_click_through(self):
-        self.is_click_through = not self.is_click_through
-        if self.is_click_through:
-            self.clickthrough_btn.setText("🔵 Type-through: ON")
-            self.clickthrough_btn.setStyleSheet("background-color: #2563eb; color: #ffffff; border: 1px solid #3b82f6; border-radius: 12px; font-size: 11px; padding: 3px 8px;")
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, True)
-            self.show()
-        else:
-            self.clickthrough_btn.setText("↖ Type-through")
-            self.clickthrough_btn.setStyleSheet("background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; font-size: 11px; padding: 3px 8px;")
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, False)
-            self.show()
+    def toggle_transparency(self):
+        self.set_transparency(not self.is_transparent_mode)
+
+    def set_type_through(self, enabled):
+        self.is_click_through = enabled
+        self.type_through_switch.set_checked(enabled)
+        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
+        self.show()
+
+    def toggle_type_through_global(self):
+        # Dedicated global hotkey (Ctrl+T) so user can ALWAYS toggle Type-Through OFF from anywhere
+        if self.is_transparent_mode:
+            self.set_type_through(not self.is_click_through)
 
     def prompt_persona(self):
         persona, ok = QInputDialog.getMultiLineText(
             self, "Customize Assistant Persona",
-            "Define your background, job role, or system prompt for the AI:",
+            "Define your background, role, and instructions for the AI:",
             self.config.get("PERSONA", "")
         )
         if ok and persona.strip():
@@ -741,8 +816,7 @@ class NativeAssistant(QMainWindow):
         persona_instruction = self.config.get("PERSONA", "")
         system_prompt = (
             f"{persona_instruction}\n"
-            "You are an expert real-time meeting and interview co-pilot. "
-            "Provide crisp, structured, high-accuracy answers immediately without fluff or boilerplate."
+            "You are an expert real-time assistant. Provide direct, concise, and structured answers immediately."
         )
 
         fast_config = types.GenerateContentConfig(
@@ -815,15 +889,13 @@ class NativeAssistant(QMainWindow):
             return
 
         self.current_ai_bubble = self.add_message("", is_user=False)
-        prompt = "Analyze this screen. If there is a question or problem, solve it with direct steps. If there is code, explain or debug it."
+        prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
         threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
     def start_voice_input(self):
         if not SPEECH_AVAILABLE or self.is_listening:
             return
         self.is_listening = True
-        self.status_pill.setText("🔴 Listening...")
-        self.status_pill.setStyleSheet("background-color: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; border-radius: 12px; padding: 2px 8px; font-size: 11px;")
 
         def listen_worker():
             try:
@@ -846,14 +918,19 @@ class NativeAssistant(QMainWindow):
                 print(f"Voice error: {e}")
             finally:
                 self.is_listening = False
-                self.status_pill.setText("● Active")
-                self.status_pill.setStyleSheet("background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; padding: 2px 8px; font-size: 11px;")
 
         threading.Thread(target=listen_worker, daemon=True).start()
 
     def on_voice_transcribed(self, text):
         self.text_input.setText(text)
         self.send_text_prompt()
+
+    # Spacebar Push-to-Talk when window is focused
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and not self.text_input.hasFocus():
+            self.start_voice_input()
+        else:
+            super().keyPressEvent(event)
 
     def toggle_visibility(self):
         if self.isVisible() and not self.isMinimized():
@@ -876,18 +953,18 @@ class NativeAssistant(QMainWindow):
         painter.drawEllipse(4, 4, 24, 24)
         painter.setPen(QColor("#0f172a"))
         painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "🪽")
+        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚡")
         painter.end()
 
         self.tray_icon.setIcon(QIcon(pixmap))
-        self.tray_icon.setToolTip("Angel Assistant")
+        self.tray_icon.setToolTip("Aura Assistant")
 
         tray_menu = QMenu()
         show_action = QAction("Show Assistant", self)
         show_action.triggered.connect(self.show_and_activate)
         tray_menu.addAction(show_action)
 
-        cam_action = QAction("📸 1-Click Screen Capture", self)
+        cam_action = QAction("📷 1-Click Screen Capture", self)
         cam_action.triggered.connect(self.capture_screen_and_analyze)
         tray_menu.addAction(cam_action)
 
@@ -926,6 +1003,7 @@ class NativeAssistant(QMainWindow):
             try:
                 keyboard.add_hotkey('ctrl+space', lambda: self.signals.toggle_window_signal.emit())
                 keyboard.add_hotkey('ctrl+g', lambda: self.toggle_transparency())
+                keyboard.add_hotkey('ctrl+t', lambda: self.toggle_type_through_global())
                 keyboard.add_hotkey('ctrl+shift+s', lambda: self.signals.trigger_camera_signal.emit())
                 keyboard.add_hotkey('ctrl+shift+v', lambda: self.start_voice_input())
             except Exception as e:
