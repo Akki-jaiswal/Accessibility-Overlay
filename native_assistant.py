@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction, QCursor
 from PIL import Image
+import ctypes
+import ctypes.wintypes
 
 try:
     from markdown_it import MarkdownIt
@@ -769,13 +771,42 @@ class NativeAssistant(QMainWindow):
     def set_type_through(self, enabled):
         self.is_click_through = enabled
         self.type_through_switch.set_checked(enabled)
-        self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enabled)
-        self.show()
 
     def toggle_type_through_global(self):
-        # Dedicated global hotkey (Ctrl+T) so user can ALWAYS toggle Type-Through OFF from anywhere
+        # Dedicated global hotkey (Ctrl+T) so user can toggle Type-Through from anywhere
         if self.is_transparent_mode:
             self.set_type_through(not self.is_click_through)
+
+    # Win32 Selective Hit-Testing:
+    # When Type-Through is ON, the middle chat passes clicks to apps underneath,
+    # but the Header, Footer dock, and buttons remain 100% clickable & draggable!
+    def nativeEvent(self, eventType, message):
+        if (eventType == b"windows_generic_MSG" or eventType == "windows_generic_MSG") and self.is_click_through:
+            try:
+                msg = ctypes.wintypes.MSG.from_address(message.__int__())
+                if msg.message == 0x0084:  # WM_NCHITTEST
+                    x = (msg.lParam & 0xFFFF)
+                    y = ((msg.lParam >> 16) & 0xFFFF)
+                    if x > 32767:
+                        x -= 65536
+                    if y > 32767:
+                        y -= 65536
+
+                    local_pos = self.mapFromGlobal(QPoint(x, y))
+
+                    # Keep Header, Footer/Dock, and Input Card fully interactive!
+                    in_header = self.header.geometry().contains(local_pos)
+                    in_dock = self.dock.geometry().contains(local_pos)
+                    in_input = self.input_card.geometry().contains(local_pos)
+
+                    if in_header or in_dock or in_input:
+                        return False, 0
+                    else:
+                        # Pass clicks through to background apps!
+                        return True, -1  # HTTRANSPARENT
+            except Exception:
+                pass
+        return super().nativeEvent(eventType, message)
 
     def prompt_persona(self):
         persona, ok = QInputDialog.getMultiLineText(
