@@ -371,7 +371,6 @@ class NativeAssistant(QMainWindow):
         self.client = None
         self.active_model_name = "gemini-flash-lite-latest"
         self.current_mode = "manual"
-        self.opacity_val = self.config.get("TRANSPARENCY", 65)
 
         self.selection_popup = SelectionActionPopup()
         self.selection_popup.action_triggered.connect(self.on_selection_action)
@@ -568,7 +567,7 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.scroll_area)
 
         # ==========================================
-        # 3. HELPER TEXT & 0-100% TRANSPARENCY SLIDER BAR
+        # 3. HELPER TEXT BAR
         # ==========================================
         self.middle_helper_bar = QWidget()
         helper_layout = QHBoxLayout(self.middle_helper_bar)
@@ -578,59 +577,9 @@ class NativeAssistant(QMainWindow):
         # Centered hint label with Space keycap style
         self.hint_label = QLabel("Press <span style='background:#1e293b; padding:1px 5px; border-radius:4px; border:1px solid #334155; font-family:Consolas,monospace; font-weight:bold; color:#f8fafc;'>Space</span> or the mic to start")
         self.hint_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignLeft)
-
         helper_layout.addStretch()
-
-        # Dynamic 0-100% Transparency Slider Container (Shown ONLY in Transparent Mode)
-        self.slider_box = QFrame()
-        self.slider_box.setStyleSheet("""
-            QFrame {
-                background-color: rgba(30, 41, 59, 0.85);
-                border: 1px solid #334155;
-                border-radius: 12px;
-                padding: 1px 6px;
-            }
-        """)
-        slider_inner = QHBoxLayout(self.slider_box)
-        slider_inner.setContentsMargins(4, 1, 4, 1)
-        slider_inner.setSpacing(6)
-
-        self.slider_icon = QLabel("◐")
-        self.slider_icon.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        slider_inner.addWidget(self.slider_icon)
-
-        self.trans_slider = QSlider(Qt.Orientation.Horizontal)
-        self.trans_slider.setRange(0, 100)
-        self.trans_slider.setValue(self.opacity_val)
-        self.trans_slider.setFixedWidth(80)
-        self.trans_slider.setStyleSheet("""
-            QSlider::groove:horizontal {
-                height: 4px;
-                background: #475569;
-                border-radius: 2px;
-            }
-            QSlider::sub-page:horizontal {
-                background: #3b82f6;
-                border-radius: 2px;
-            }
-            QSlider::handle:horizontal {
-                background: #ffffff;
-                width: 10px;
-                margin-top: -3px;
-                margin-bottom: -3px;
-                border-radius: 5px;
-            }
-        """)
-        self.trans_slider.valueChanged.connect(self.on_slider_changed)
-        slider_inner.addWidget(self.trans_slider)
-
-        self.percent_label = QLabel(f"{self.opacity_val}%")
-        self.percent_label.setStyleSheet("color: #f8fafc; font-size: 10px; font-weight: bold; min-width: 24px;")
-        slider_inner.addWidget(self.percent_label)
-
-        self.slider_box.hide()  # Hidden by default in non-transparent mode
-        helper_layout.addWidget(self.slider_box, alignment=Qt.AlignmentFlag.AlignRight)
+        helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        helper_layout.addStretch()
 
         container_layout.addWidget(self.middle_helper_bar)
 
@@ -800,24 +749,15 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            # 0% slider = 0% transparency (solid dark, alpha = 240)
-            # 100% slider = 100% transparency (fully clear/invisible)
-            transparency_factor = self.opacity_val / 100.0
-            raw_alpha = int((1.0 - transparency_factor) * 240)
-            
-            # When Type-Through is OFF, enforce minimum alpha of 8 so Windows OS never allows clicks to leak to background apps
-            if not self.is_click_through:
-                effective_alpha = max(8, raw_alpha)
+            if self.is_click_through:
+                bg_alpha = 0
             else:
-                effective_alpha = raw_alpha
-            
-            border_alpha = max(0, min(200, int((1.0 - transparency_factor) * 180)))
-            border_style = f"1px solid rgba(51, 65, 85, {border_alpha})" if border_alpha > 20 else "none"
-            
+                bg_alpha = 8
+
             self.main_container.setStyleSheet(f"""
                 QWidget#MainContainer {{
-                    background-color: rgba(15, 23, 42, {effective_alpha});
-                    border: {border_style};
+                    background-color: rgba(15, 23, 42, {bg_alpha});
+                    border: none;
                     border-radius: 14px;
                 }}
             """)
@@ -829,14 +769,6 @@ class NativeAssistant(QMainWindow):
                     border-radius: 14px;
                 }
             """)
-
-    def on_slider_changed(self, val):
-        self.opacity_val = val
-        self.percent_label.setText(f"{val}%")
-        self.config["TRANSPARENCY"] = val
-        save_config(self.config)
-        self.apply_container_style()
-        self.main_container.update()
 
     def set_mode(self, mode):
         self.current_mode = mode
@@ -888,8 +820,6 @@ class NativeAssistant(QMainWindow):
         if hasattr(self, 'shadow_effect'):
             self.shadow_effect.setEnabled(not enabled)
 
-        self.apply_container_style()
-        
         # Synchronously update all message bubbles
         for i in range(self.chat_layout.count()):
             item = self.chat_layout.itemAt(i)
@@ -897,16 +827,16 @@ class NativeAssistant(QMainWindow):
             if isinstance(widget, MessageBubble):
                 widget.apply_transparency(enabled)
         
-        # Synchronously toggle dynamic controls
+        # Synchronously toggle dynamic Type-through switch
         if self.is_transparent_mode:
             self.type_through_switch.show()
-            self.slider_box.show()
+            self.type_through_switch.set_checked(self.is_click_through)
         else:
             self.type_through_switch.hide()
-            self.slider_box.hide()
             if self.is_click_through:
                 self.set_type_through(False)
         
+        self.apply_container_style()
         self.main_container.update()
         self.update()
         QApplication.processEvents()
