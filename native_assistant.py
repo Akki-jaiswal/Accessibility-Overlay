@@ -334,7 +334,7 @@ class MessageBubble(QFrame):
                         background-color: #1e293b;
                         border: 1px solid #334155;
                         border-radius: 10px;
-                        margin-left: 50px;
+                        margin-left: 48px;
                         margin-right: 2px;
                         margin-top: 2px;
                         margin-bottom: 2px;
@@ -346,7 +346,7 @@ class MessageBubble(QFrame):
                         background-color: #182234;
                         border: 1px solid #1e293b;
                         border-radius: 10px;
-                        margin-right: 30px;
+                        margin-right: 28px;
                         margin-left: 2px;
                         margin-top: 2px;
                         margin-bottom: 2px;
@@ -361,6 +361,9 @@ class MessageBubble(QFrame):
                     font-family: 'Segoe UI', -apple-system, sans-serif;
                 }
             """)
+        if self.raw_text:
+            self.text_browser.setHtml(self._render_html(self.raw_text, is_transparent))
+        self.adjust_height()
         self.update()
 
     def on_selection_changed(self):
@@ -371,7 +374,7 @@ class MessageBubble(QFrame):
         elif self.parent_assistant:
             self.parent_assistant.selection_popup.hide()
 
-    def _render_html(self, text):
+    def _render_html(self, text, is_transparent=False):
         if not text:
             return ""
         if md_parser:
@@ -379,16 +382,21 @@ class MessageBubble(QFrame):
         else:
             html = f"<p>{text}</p>"
         
+        text_color = "#ffffff" if is_transparent else "#f1f5f9"
+        code_bg = "rgba(15, 23, 42, 0.55)" if is_transparent else "#0b1120"
+        pre_bg = "rgba(15, 23, 42, 0.65)" if is_transparent else "#0b1120"
+        pre_border = "1px solid rgba(51, 65, 85, 0.35)" if is_transparent else "1px solid #1e293b"
+
         styled_html = f"""
         <style>
-            body {{ color: #f1f5f9; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; }}
+            body {{ color: {text_color}; font-family: 'Segoe UI', -apple-system, sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; }}
             p {{ margin: 0 0 5px 0; }}
             strong {{ color: #38bdf8; font-weight: 600; }}
             h1, h2, h3, h4 {{ color: #60a5fa; margin: 5px 0 3px 0; font-size: 13.5px; font-weight: bold; }}
             ul, ol {{ margin: 0 0 5px 14px; padding: 0; }}
             li {{ margin-bottom: 2px; }}
-            code {{ background-color: #0b1120; color: #7dd3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
-            pre {{ background-color: #0b1120; padding: 6px; border-radius: 5px; border: 1px solid #1e293b; margin: 3px 0; }}
+            code {{ background-color: {code_bg}; color: #7dd3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
+            pre {{ background-color: {pre_bg}; padding: 6px; border-radius: 5px; border: {pre_border}; margin: 3px 0; }}
         </style>
         {html}
         """
@@ -396,19 +404,31 @@ class MessageBubble(QFrame):
 
     def update_content(self, text):
         self.raw_text = text
-        self.text_browser.setHtml(self._render_html(text))
+        is_trans = self.parent_assistant.is_transparent_mode if self.parent_assistant else False
+        self.text_browser.setHtml(self._render_html(text, is_trans))
         self.adjust_height()
 
     def append_text(self, new_text):
         self.raw_text += new_text
-        self.text_browser.setHtml(self._render_html(self.raw_text))
+        is_trans = self.parent_assistant.is_transparent_mode if self.parent_assistant else False
+        self.text_browser.setHtml(self._render_html(self.raw_text, is_trans))
         self.adjust_height()
 
     def adjust_height(self):
+        avail_width = 460
+        if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
+            vp_w = self.parent_assistant.scroll_area.viewport().width()
+            if vp_w > 100:
+                if self.parent_assistant.is_transparent_mode:
+                    avail_width = max(160, vp_w - 32)
+                else:
+                    margin = 68 if self.is_user else 48
+                    avail_width = max(160, vp_w - margin)
         doc = self.text_browser.document()
-        doc.setTextWidth(460)
+        doc.setTextWidth(avail_width)
         h = int(doc.size().height()) + 8
-        self.text_browser.setFixedHeight(max(18, h))
+        self.text_browser.setFixedHeight(max(20, h))
+        self.updateGeometry()
 
 
 class NativeAssistant(QMainWindow):
@@ -920,6 +940,18 @@ class NativeAssistant(QMainWindow):
         self.current_size_index = (self.current_size_index + 1) % len(self.SIZES)
         w, h = self.SIZES[self.current_size_index]
         self.resize(w, h)
+        QTimer.singleShot(25, self.reflow_bubbles)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reflow_bubbles()
+
+    def reflow_bubbles(self):
+        for i in range(self.chat_layout.count()):
+            item = self.chat_layout.itemAt(i)
+            widget = item.widget() if item else None
+            if isinstance(widget, MessageBubble):
+                widget.adjust_height()
 
     def set_transparency(self, enabled):
         self.is_transparent_mode = enabled
@@ -929,7 +961,7 @@ class NativeAssistant(QMainWindow):
         if hasattr(self, 'shadow_effect'):
             self.shadow_effect.setEnabled(not enabled)
 
-        # Synchronously update all message bubbles
+        # Synchronously update all message bubbles with dynamic height reflow
         for i in range(self.chat_layout.count()):
             item = self.chat_layout.itemAt(i)
             widget = item.widget() if item else None
@@ -949,6 +981,9 @@ class NativeAssistant(QMainWindow):
                 self.set_type_through(False)
         
         self.apply_container_style()
+        self.main_container.style().unpolish(self.main_container)
+        self.main_container.style().polish(self.main_container)
+        self.reflow_bubbles()
         self.main_container.update()
         self.update()
         QApplication.processEvents()
