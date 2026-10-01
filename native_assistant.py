@@ -664,6 +664,7 @@ class NativeAssistant(QMainWindow):
         # 3. HELPER TEXT & AUTO-HIDE HOVER SLIDER BAR
         # ==========================================
         self.middle_helper_bar = QWidget()
+        self.middle_helper_bar.setFixedHeight(28)
         self.middle_helper_bar.setMouseTracking(True)
         helper_layout = QHBoxLayout(self.middle_helper_bar)
         helper_layout.setContentsMargins(4, 0, 4, 0)
@@ -672,17 +673,18 @@ class NativeAssistant(QMainWindow):
         # Centered hint label with Space keycap style
         self.hint_label = QLabel("Press <span style='background:#1e293b; padding:1px 5px; border-radius:4px; border:1px solid #334155; font-family:Consolas,monospace; font-weight:bold; color:#f8fafc;'>Space</span> or the mic to start")
         self.hint_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
-        helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignLeft)
+        helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         helper_layout.addStretch()
 
         # Dynamic Hover-Style Transparency Slider (Shows for 6s on hover/touch)
         self.slider_box = HoverSliderBox(self)
+        self.slider_box.setFixedHeight(26)
         self.slider_box.trans_slider.setValue(self.opacity_val)
         self.slider_box.percent_label.setText(f"{self.opacity_val}%")
         self.slider_box.trans_slider.valueChanged.connect(self.on_slider_changed)
         self.slider_box.hide()
-        helper_layout.addWidget(self.slider_box, alignment=Qt.AlignmentFlag.AlignRight)
+        helper_layout.addWidget(self.slider_box, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         container_layout.addWidget(self.middle_helper_bar)
 
@@ -732,15 +734,22 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.input_card)
 
         # ==========================================
-        # 4. BOTTOM DOCK (Clean Separated Floating Action Buttons)
+        # 4. BOTTOM DOCK (3-Column Perfectly Centered Layout)
         # ==========================================
         self.dock = QWidget()
         self.dock.setObjectName("DockWidget")
+        self.dock.setFixedHeight(46)
         dock_layout = QHBoxLayout(self.dock)
-        dock_layout.setContentsMargins(0, 2, 0, 0)
-        dock_layout.setSpacing(8)
+        dock_layout.setContentsMargins(0, 0, 0, 0)
+        dock_layout.setSpacing(0)
 
-        # Left: ⚙️ Settings + Credits/Model Badge
+        # 1. Left Container (Key + Credits)
+        self.dock_left = QWidget()
+        dock_left_layout = QHBoxLayout(self.dock_left)
+        dock_left_layout.setContentsMargins(0, 0, 0, 0)
+        dock_left_layout.setSpacing(6)
+        dock_left_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
         self.key_btn = QPushButton("⚙️")
         self.key_btn.setToolTip("Settings / API Key")
         self.key_btn.setFixedSize(30, 30)
@@ -749,15 +758,19 @@ class NativeAssistant(QMainWindow):
             QPushButton:hover { background-color: #334155; }
         """)
         self.key_btn.clicked.connect(self.prompt_api_key)
-        dock_layout.addWidget(self.key_btn)
+        dock_left_layout.addWidget(self.key_btn)
 
         self.credits_badge = QLabel("🪙 Free")
         self.credits_badge.setStyleSheet("background-color: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 12px; padding: 2px 8px; font-size: 11px;")
-        dock_layout.addWidget(self.credits_badge)
+        dock_left_layout.addWidget(self.credits_badge)
 
-        dock_layout.addStretch()
+        # 2. Center Container (Action Buttons: Camera, Mic, Message)
+        self.dock_center = QWidget()
+        dock_center_layout = QHBoxLayout(self.dock_center)
+        dock_center_layout.setContentsMargins(0, 0, 0, 0)
+        dock_center_layout.setSpacing(8)
+        dock_center_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # Center Action Buttons (3 distinct circular buttons)
         self.cam_btn = QPushButton("📷")
         self.cam_btn.setToolTip("1-Click Screen Capture (Ctrl+Shift+S)")
         self.cam_btn.setFixedSize(36, 36)
@@ -774,9 +787,8 @@ class NativeAssistant(QMainWindow):
             }
         """)
         self.cam_btn.clicked.connect(self.capture_screen_and_analyze)
-        dock_layout.addWidget(self.cam_btn)
+        dock_center_layout.addWidget(self.cam_btn)
 
-        # Prominent Vibrant Blue Circle Mic Button
         self.voice_btn = QPushButton("🎙️")
         self.voice_btn.setToolTip("Voice Dictation (Press Space when focused, or Ctrl+Shift+V)")
         self.voice_btn.setFixedSize(42, 42)
@@ -793,9 +805,8 @@ class NativeAssistant(QMainWindow):
             }
         """)
         self.voice_btn.clicked.connect(self.start_voice_input)
-        dock_layout.addWidget(self.voice_btn)
+        dock_center_layout.addWidget(self.voice_btn)
 
-        # Message / Chat Focus Button
         self.chat_btn = QPushButton("💬")
         self.chat_btn.setToolTip("Focus Message Input")
         self.chat_btn.setFixedSize(36, 36)
@@ -812,33 +823,40 @@ class NativeAssistant(QMainWindow):
             }
         """)
         self.chat_btn.clicked.connect(lambda: self.text_input.setFocus())
-        dock_layout.addWidget(self.chat_btn)
+        dock_center_layout.addWidget(self.chat_btn)
 
-        dock_layout.addStretch()
+        # 3. Right Container (Type-through Switch + Transparent Switch)
+        self.dock_right = QWidget()
+        dock_right_layout = QHBoxLayout(self.dock_right)
+        dock_right_layout.setContentsMargins(0, 0, 0, 0)
+        dock_right_layout.setSpacing(6)
+        dock_right_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        # Right: Type-through Switch (Shown ONLY in transparent mode)
         self.type_through_switch = CompactToggleSwitch("Type-through", is_checked=False)
         self.type_through_switch.toggled.connect(self.set_type_through)
         self.type_through_switch.hide()
-        dock_layout.addWidget(self.type_through_switch)
+        dock_right_layout.addWidget(self.type_through_switch)
 
-        # Right: Transparent Switch with Painted Knob
         self.trans_switch = CompactToggleSwitch("Transparent", is_checked=False)
         self.trans_switch.toggled.connect(self.set_transparency)
-        dock_layout.addWidget(self.trans_switch)
+        dock_right_layout.addWidget(self.trans_switch)
+
+        # Assemble Dock with Balanced 1-0-1 Stretch Factors
+        dock_layout.addWidget(self.dock_left, 1)
+        dock_layout.addWidget(self.dock_center, 0)
+        dock_layout.addWidget(self.dock_right, 1)
 
         container_layout.addWidget(self.dock)
         self.setCentralWidget(self.main_container)
 
-        # Install event filters for smooth header/dock dragging
+        # Install event filters for smooth header dragging
         self.header.installEventFilter(self)
-        self.dock.installEventFilter(self)
         self.brand_label.installEventFilter(self)
 
         self.add_message("Hi! I'm Aura. I can help you silently in all meetings, interviews, and code tasks.", is_user=False)
 
     def eventFilter(self, source, event):
-        if source in (self.header, self.dock, self.brand_label):
+        if source in (self.header, self.brand_label):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
                 return False
@@ -873,7 +891,7 @@ class NativeAssistant(QMainWindow):
         else:
             self.main_container.setStyleSheet("""
                 QWidget#MainContainer {
-                    background-color: rgba(15, 23, 42, 245);
+                    background-color: #0f172a;
                     border: 1px solid #334155;
                     border-radius: 14px;
                 }
@@ -885,17 +903,24 @@ class NativeAssistant(QMainWindow):
             self.slider_timer.start(6000)
 
     def hide_slider_on_timeout(self):
+        if not self.is_transparent_mode:
+            self.slider_box.hide()
+            return
         if self.slider_box.underMouse() or self.slider_box.trans_slider.isSliderDown():
             self.slider_timer.start(6000)
         else:
             self.slider_box.hide()
 
     def on_slider_hover_enter(self):
+        if not self.is_transparent_mode:
+            return
         self.slider_timer.stop()
 
     def on_slider_hover_leave(self):
         if self.is_transparent_mode:
             self.slider_timer.start(6000)
+        else:
+            self.slider_box.hide()
 
     def on_slider_changed(self, val):
         self.opacity_val = val
