@@ -268,10 +268,10 @@ class HoverSliderBox(QFrame):
 
 # --- Adaptive Static & Responsive Message Bubble ---
 class MessageBubble(QFrame):
-    def __init__(self, text, is_user=False, is_image=False, pixmap=None, parent_assistant=None):
+    def __init__(self, text="", is_user=False, is_image=False, pixmap=None, parent_assistant=None):
         super().__init__(parent_assistant)
         self.parent_assistant = parent_assistant
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.raw_text = text
         self.is_user = is_user
         self.is_image = is_image
@@ -279,8 +279,8 @@ class MessageBubble(QFrame):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(3)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(2)
 
         if is_image and pixmap:
             self.img_label = QLabel()
@@ -323,6 +323,7 @@ class MessageBubble(QFrame):
             layout.addWidget(self.img_label, alignment=Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft)
 
         self.text_browser = QTextBrowser()
+        self.text_browser.setFrameShape(QFrame.Shape.NoFrame)
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setReadOnly(True)
         self.text_browser.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
@@ -389,7 +390,13 @@ class MessageBubble(QFrame):
                 self.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
-        self.update_content(text)
+        
+        # Hide bubble initially if empty so no phantom box appears before text
+        if not text and not is_image:
+            self.hide()
+            self.text_browser.setFixedHeight(0)
+        else:
+            self.update_content(text)
 
     def show_action_chips(self):
         if self.chips_widget and not self.is_user and not self.is_image:
@@ -428,11 +435,8 @@ class MessageBubble(QFrame):
                     QFrame {
                         background-color: transparent;
                         border: none;
-                        margin-left: 2px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
-                        padding: 2px 2px;
+                        margin: 0px;
+                        padding: 0px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -462,14 +466,10 @@ class MessageBubble(QFrame):
             else:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: #101927;
-                        border: 1px solid #1e293b;
-                        border-radius: 9px;
-                        margin-left: 2px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
-                        padding: 4px 6px;
+                        background-color: transparent;
+                        border: none;
+                        margin: 0px;
+                        padding: 0px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -528,12 +528,16 @@ class MessageBubble(QFrame):
 
     def update_content(self, text):
         self.raw_text = text
+        if self.raw_text:
+            self.show()
         is_trans = self.parent_assistant.is_transparent_mode if self.parent_assistant else False
         self.text_browser.setHtml(self._render_html(text, is_trans))
         self.adjust_height()
 
     def append_text(self, new_text):
         self.raw_text += new_text
+        if self.raw_text:
+            self.show()
         is_trans = self.parent_assistant.is_transparent_mode if self.parent_assistant else False
         self.text_browser.setHtml(self._render_html(self.raw_text, is_trans))
         self.adjust_height()
@@ -543,6 +547,10 @@ class MessageBubble(QFrame):
         self.adjust_height()
 
     def adjust_height(self):
+        if not self.raw_text and not self.is_image:
+            self.text_browser.setFixedHeight(0)
+            self.updateGeometry()
+            return
         w = self.text_browser.viewport().width()
         if w <= 10:
             w = self.text_browser.width()
