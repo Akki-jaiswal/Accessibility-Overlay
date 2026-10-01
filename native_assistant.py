@@ -274,6 +274,7 @@ class MessageBubble(QFrame):
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.raw_text = text
         self.is_user = is_user
+        self.is_image = is_image
         
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
@@ -283,10 +284,43 @@ class MessageBubble(QFrame):
 
         if is_image and pixmap:
             self.img_label = QLabel()
-            scaled_pixmap = pixmap.scaledToWidth(240, Qt.TransformationMode.SmoothTransformation)
-            self.img_label.setPixmap(scaled_pixmap)
-            self.img_label.setStyleSheet("border-radius: 6px; margin-bottom: 4px;")
-            layout.addWidget(self.img_label)
+            # Scale thumbnail
+            scaled_pixmap = pixmap.scaledToWidth(220, Qt.TransformationMode.SmoothTransformation)
+            
+            # Composite with rounded corners & green checkmark badge (just like Angel reference)
+            badge_pixmap = QPixmap(scaled_pixmap.size())
+            badge_pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(badge_pixmap)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            
+            from PyQt6.QtGui import QPainterPath
+            path = QPainterPath()
+            path.addRoundedRect(0, 0, scaled_pixmap.width(), scaled_pixmap.height(), 8, 8)
+            painter.setClipPath(path)
+            painter.drawPixmap(0, 0, scaled_pixmap)
+            painter.setClipping(False)
+            
+            # Subtle border
+            painter.setPen(QColor("#334155"))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(0, 0, scaled_pixmap.width() - 1, scaled_pixmap.height() - 1, 8, 8)
+            
+            # Vibrant Circular Green Checkmark Badge (✓) in bottom-right corner
+            badge_size = 20
+            badge_x = scaled_pixmap.width() - badge_size - 6
+            badge_y = scaled_pixmap.height() - badge_size - 6
+            painter.setBrush(QColor("#10b981"))
+            painter.setPen(QColor("#059669"))
+            painter.drawEllipse(badge_x, badge_y, badge_size, badge_size)
+            
+            painter.setPen(QColor("#ffffff"))
+            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            painter.drawText(badge_x, badge_y, badge_size, badge_size, Qt.AlignmentFlag.AlignCenter, "✓")
+            painter.end()
+            
+            self.img_label.setPixmap(badge_pixmap)
+            self.img_label.setStyleSheet("margin-bottom: 4px; background: transparent; border: none;")
+            layout.addWidget(self.img_label, alignment=Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft)
 
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)
@@ -301,6 +335,50 @@ class MessageBubble(QFrame):
         self.text_browser.selectionChanged.connect(self.on_selection_changed)
         layout.addWidget(self.text_browser)
 
+        # 3 Quick Action Chips under AI Response (Explain More, Give Example, Simplify)
+        if not is_user and not is_image:
+            self.chips_widget = QWidget()
+            chips_layout = QHBoxLayout(self.chips_widget)
+            chips_layout.setContentsMargins(0, 4, 0, 0)
+            chips_layout.setSpacing(6)
+            chips_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+            chip_style = """
+                QPushButton {
+                    background-color: #1e293b;
+                    color: #94a3b8;
+                    border: 1px solid #334155;
+                    border-radius: 11px;
+                    padding: 3px 9px;
+                    font-size: 11px;
+                    font-weight: 600;
+                }
+                QPushButton:hover {
+                    background-color: #334155;
+                    color: #38bdf8;
+                    border-color: #0284c7;
+                }
+            """
+
+            self.btn_more = QPushButton("🪄 Explain More")
+            self.btn_more.setStyleSheet(chip_style)
+            self.btn_more.clicked.connect(lambda: self.on_chip_clicked("Explain More"))
+            chips_layout.addWidget(self.btn_more)
+
+            self.btn_example = QPushButton("🪄 Give Example")
+            self.btn_example.setStyleSheet(chip_style)
+            self.btn_example.clicked.connect(lambda: self.on_chip_clicked("Give Example"))
+            chips_layout.addWidget(self.btn_example)
+
+            self.btn_simplify = QPushButton("🪄 Simplify")
+            self.btn_simplify.setStyleSheet(chip_style)
+            self.btn_simplify.clicked.connect(lambda: self.on_chip_clicked("Simplify"))
+            chips_layout.addWidget(self.btn_simplify)
+
+            layout.addWidget(self.chips_widget)
+        else:
+            self.chips_widget = None
+
         # Set transparent mouse events if parent is in type-through mode
         if parent_assistant and parent_assistant.is_click_through:
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -310,6 +388,18 @@ class MessageBubble(QFrame):
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         self.update_content(text)
+
+    def on_chip_clicked(self, chip_type):
+        if not self.parent_assistant:
+            return
+        excerpt = self.raw_text.strip()[:400]
+        if chip_type == "Explain More":
+            prompt = f"Explain this concept in more depth and detail, breaking down the underlying technical mechanics:\n\n\"{excerpt}\""
+        elif chip_type == "Give Example":
+            prompt = f"Give a concrete walkthrough example and scenario for this in context:\n\n\"{excerpt}\""
+        else:
+            prompt = f"Simplify this into 1-2 clear, punchy spoken sentences I can say aloud in an interview:\n\n\"{excerpt}\""
+        self.parent_assistant.on_selection_action(chip_type, prompt)
 
     def apply_transparency(self, is_transparent):
         if is_transparent:
@@ -496,6 +586,7 @@ class NativeAssistant(QMainWindow):
         self.init_ui()
         self.init_tray()
         self.setup_hotkeys()
+        self.setup_stealth_display_affinity()
 
         # Connect signals
         self.signals.stream_chunk.connect(self.on_stream_chunk)
@@ -506,6 +597,18 @@ class NativeAssistant(QMainWindow):
         self.signals.trigger_camera_signal.connect(self.capture_screen_and_analyze)
         self.signals.transparency_toggled_signal.connect(self.set_transparency)
         self.signals.type_through_toggled_signal.connect(self.set_type_through)
+
+    def setup_stealth_display_affinity(self):
+        # Native Windows Display Affinity Shield: Excludes overlay window from screen recording
+        try:
+            import ctypes
+            hwnd = int(self.winId())
+            # WDA_EXCLUDEFROMCAPTURE = 0x00000011 (Windows 10 2004+ / Windows 11)
+            res = ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x00000011)
+            if not res:
+                ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0x00000001)
+        except Exception as e:
+            pass
 
     def init_ai(self):
         api_key = self.config.get("GEMINI_API_KEY", "")
@@ -688,6 +791,28 @@ class NativeAssistant(QMainWindow):
         self.scroll_area.setWidget(self.chat_widget)
         container_layout.addWidget(self.scroll_area)
 
+        # Floating Jump-to-Bottom Button
+        self.scroll_bottom_btn = QPushButton("↓", self.main_container)
+        self.scroll_bottom_btn.setFixedSize(26, 26)
+        self.scroll_bottom_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(30, 41, 59, 0.85);
+                color: #f8fafc;
+                border: 1px solid #475569;
+                border-radius: 13px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #2563eb;
+                border-color: #3b82f6;
+            }
+        """)
+        self.scroll_bottom_btn.clicked.connect(self.scroll_to_bottom)
+        self.scroll_bottom_btn.hide()
+
+        self.scroll_area.verticalScrollBar().valueChanged.connect(self.on_scroll_value_changed)
+
         # ==========================================
         # 3. HELPER TEXT & AUTO-HIDE HOVER SLIDER BAR
         # ==========================================
@@ -702,6 +827,20 @@ class NativeAssistant(QMainWindow):
         self.hint_label = QLabel("Press <span style='background:#1e293b; padding:1px 5px; border-radius:4px; border:1px solid #334155; font-family:Consolas,monospace; font-weight:bold; color:#f8fafc;'>Space</span> or the mic to start")
         self.hint_label.setStyleSheet("color: #94a3b8; font-size: 11px;")
         helper_layout.addWidget(self.hint_label, alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        # Live Status Pill (Generating answer... / Capturing screen...)
+        self.status_pill = QLabel("Generating answer...")
+        self.status_pill.setStyleSheet("""
+            background-color: rgba(30, 41, 59, 0.90);
+            color: #38bdf8;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-size: 10.5px;
+            font-weight: 600;
+        """)
+        self.status_pill.hide()
+        helper_layout.addWidget(self.status_pill, alignment=Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
 
         helper_layout.addStretch()
 
@@ -1102,9 +1241,26 @@ class NativeAssistant(QMainWindow):
     def scroll_to_bottom(self):
         self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
 
+    def on_scroll_value_changed(self, val):
+        max_val = self.scroll_area.verticalScrollBar().maximum()
+        if max_val - val > 60:
+            self.scroll_bottom_btn.show()
+            self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 110)
+            self.scroll_bottom_btn.raise_()
+        else:
+            self.scroll_bottom_btn.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.reflow_bubbles()
+        if hasattr(self, 'scroll_bottom_btn'):
+            self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 110)
+
     def on_selection_action(self, action_type, full_prompt):
         self.add_message(full_prompt, is_user=True)
         self.current_ai_bubble = self.add_message("", is_user=False)
+        self.status_pill.setText("Generating answer...")
+        self.status_pill.show()
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
     def send_text_prompt(self):
@@ -1119,6 +1275,8 @@ class NativeAssistant(QMainWindow):
             return
 
         self.current_ai_bubble = self.add_message("", is_user=False)
+        self.status_pill.setText("Generating answer...")
+        self.status_pill.show()
         threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
 
     def _stream_response(self, prompt, image_bytes=None):
@@ -1146,7 +1304,17 @@ class NativeAssistant(QMainWindow):
         persona_instruction = self.config.get("PERSONA", "")
         system_prompt = (
             f"{persona_instruction}\n"
-            "You are an expert real-time assistant. Provide direct, concise, and structured answers immediately."
+            "You are an expert real-time AI assistant for technical interviews, coding rounds, and system design.\n\n"
+            "When explaining an algorithm, coding problem, or architecture, ALWAYS structure your response using the **HEROS Framework**:\n"
+            "• **H — Hypothesis**: State the core premise, invariant, or approach directly in 1-2 sentences.\n"
+            "• **E — Example**: Provide a concrete walkthrough, test case, or step-by-step trace.\n"
+            "• **R — Resolution**: Step-by-step implementation logic and clean, optimal code.\n"
+            "• **O — Optimization**: Time and Space complexity analysis (e.g., O(V+E) vs O(V^2)) and trade-offs.\n"
+            "• **S — Summary**: A punchy, spoken 1-2 sentence response the candidate can say aloud to an interviewer.\n\n"
+            "When analyzing a screen capture image, ALWAYS structure with:\n"
+            "• **Final Answer:** Direct, actionable solution.\n"
+            "• **Reasoning:** Concise step-by-step bullet points.\n\n"
+            "Keep formatting clean with bold headings and readable bullet points. Avoid filler text."
         )
 
         fast_config = types.GenerateContentConfig(
@@ -1182,9 +1350,12 @@ class NativeAssistant(QMainWindow):
             self.scroll_to_bottom()
 
     def on_stream_finished(self):
-        pass
+        self.status_pill.hide()
 
     def capture_screen_and_analyze(self):
+        self.status_pill.setText("••• 📸 Capturing screen...")
+        self.status_pill.show()
+        
         was_visible = self.isVisible()
         if was_visible:
             self.hide()
@@ -1195,6 +1366,7 @@ class NativeAssistant(QMainWindow):
         if not screen:
             if was_visible:
                 self.show_and_activate()
+            self.status_pill.hide()
             return
 
         pixmap = screen.grabWindow(0)
@@ -1216,7 +1388,11 @@ class NativeAssistant(QMainWindow):
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
+            self.status_pill.hide()
             return
+
+        self.status_pill.setText("Generating answer...")
+        self.status_pill.show()
 
         self.current_ai_bubble = self.add_message("", is_user=False)
         prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
