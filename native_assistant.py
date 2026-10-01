@@ -72,6 +72,8 @@ class WorkerSignals(QObject):
     stream_chunk = pyqtSignal(str)
     stream_finished = pyqtSignal()
     voice_transcribed = pyqtSignal(str)
+    voice_status_signal = pyqtSignal(str, str)
+    voice_finished_signal = pyqtSignal()
     show_window_signal = pyqtSignal()
     toggle_window_signal = pyqtSignal()
     trigger_camera_signal = pyqtSignal()
@@ -267,27 +269,30 @@ class HoverSliderBox(QFrame):
 
 
 # --- Adaptive Static & Responsive Message Bubble ---
-class MessageBubble(QFrame):
+class MessageBubble(QWidget):
     def __init__(self, text="", is_user=False, is_image=False, pixmap=None, parent_assistant=None):
         super().__init__(parent_assistant)
         self.parent_assistant = parent_assistant
-        self.setFrameShape(QFrame.Shape.NoFrame)
         self.raw_text = text
         self.is_user = is_user
         self.is_image = is_image
         
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 2, 0, 2)
-        layout.setSpacing(2)
-
+        # Outer container layout
+        outer_layout = QHBoxLayout(self)
+        outer_layout.setContentsMargins(0, 3, 0, 3)
+        outer_layout.setSpacing(0)
+        
+        # Inner Card
+        self.card = QFrame()
+        self.card.setObjectName("BubbleCard")
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(10, 8, 10, 8)
+        card_layout.setSpacing(4)
+        
         if is_image and pixmap:
             self.img_label = QLabel()
-            # Scale thumbnail
             scaled_pixmap = pixmap.scaledToWidth(220, Qt.TransformationMode.SmoothTransformation)
             
-            # Composite with rounded corners & green checkmark badge (just like Angel reference)
             badge_pixmap = QPixmap(scaled_pixmap.size())
             badge_pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(badge_pixmap)
@@ -300,12 +305,10 @@ class MessageBubble(QFrame):
             painter.drawPixmap(0, 0, scaled_pixmap)
             painter.setClipping(False)
             
-            # Subtle border
             painter.setPen(QColor("#334155"))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(0, 0, scaled_pixmap.width() - 1, scaled_pixmap.height() - 1, 8, 8)
             
-            # Vibrant Circular Green Checkmark Badge (✓) in bottom-right corner
             badge_size = 20
             badge_x = scaled_pixmap.width() - badge_size - 6
             badge_y = scaled_pixmap.height() - badge_size - 6
@@ -319,8 +322,8 @@ class MessageBubble(QFrame):
             painter.end()
             
             self.img_label.setPixmap(badge_pixmap)
-            self.img_label.setStyleSheet("margin-bottom: 2px; background: transparent; border: none;")
-            layout.addWidget(self.img_label, alignment=Qt.AlignmentFlag.AlignRight if is_user else Qt.AlignmentFlag.AlignLeft)
+            self.img_label.setStyleSheet("background: transparent; border: none;")
+            card_layout.addWidget(self.img_label)
 
         self.text_browser = QTextBrowser()
         self.text_browser.setFrameShape(QFrame.Shape.NoFrame)
@@ -332,15 +335,16 @@ class MessageBubble(QFrame):
         self.text_browser.viewport().setAutoFillBackground(False)
         self.text_browser.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.text_browser.document().setDocumentMargin(0)
-        
         self.text_browser.selectionChanged.connect(self.on_selection_changed)
-        layout.addWidget(self.text_browser)
+        self.text_browser.document().contentsChanged.connect(self.adjust_height)
+        
+        card_layout.addWidget(self.text_browser)
 
-        # 3 Clean Follow-Up Action Chips (Explain More, Give Example, Simplify - NO emoji, shown ONLY after AI response)
+        # 3 Clean Follow-Up Action Chips (Explain More, Give Example, Simplify)
         if not is_user and not is_image:
             self.chips_widget = QWidget()
             chips_layout = QHBoxLayout(self.chips_widget)
-            chips_layout.setContentsMargins(0, 2, 0, 0)
+            chips_layout.setContentsMargins(0, 4, 0, 0)
             chips_layout.setSpacing(6)
             chips_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
@@ -350,7 +354,7 @@ class MessageBubble(QFrame):
                     color: #94a3b8;
                     border: 1px solid #334155;
                     border-radius: 9px;
-                    padding: 2px 8px;
+                    padding: 3px 10px;
                     font-size: 11px;
                     font-weight: 500;
                 }
@@ -376,18 +380,15 @@ class MessageBubble(QFrame):
             self.btn_simplify.clicked.connect(lambda: self.on_chip_clicked("Simplify"))
             chips_layout.addWidget(self.btn_simplify)
 
-            layout.addWidget(self.chips_widget)
-            # Initially hide chips; only show once the AI answer is generated!
+            card_layout.addWidget(self.chips_widget)
             self.chips_widget.hide()
         else:
             self.chips_widget = None
 
-        # Set transparent mouse events if parent is in type-through mode
-        if parent_assistant and parent_assistant.is_click_through:
-            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            self.text_browser.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            if self.text_browser.viewport():
-                self.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        if is_user:
+            outer_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignRight)
+        else:
+            outer_layout.addWidget(self.card)
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         
@@ -418,29 +419,19 @@ class MessageBubble(QFrame):
     def apply_transparency(self, is_transparent):
         if is_transparent:
             if self.is_user:
-                self.setStyleSheet("""
-                    QFrame {
-                        background-color: rgba(30, 41, 59, 0.85);
+                self.card.setStyleSheet("""
+                    QFrame#BubbleCard {
+                        background-color: rgba(30, 41, 59, 0.90);
                         border: 1px solid rgba(71, 85, 105, 0.60);
-                        border-radius: 10px;
-                        margin-left: 48px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
-                        padding: 5px 9px;
+                        border-radius: 12px;
                     }
                 """)
             else:
-                self.setStyleSheet("""
-                    QFrame {
-                        background-color: rgba(10, 15, 29, 0.82);
+                self.card.setStyleSheet("""
+                    QFrame#BubbleCard {
+                        background-color: rgba(10, 15, 29, 0.88);
                         border: 1px solid rgba(51, 65, 85, 0.50);
-                        border-radius: 10px;
-                        margin-left: 2px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
-                        padding: 6px 10px;
+                        border-radius: 12px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -455,29 +446,19 @@ class MessageBubble(QFrame):
             """)
         else:
             if self.is_user:
-                self.setStyleSheet("""
-                    QFrame {
+                self.card.setStyleSheet("""
+                    QFrame#BubbleCard {
                         background-color: #1e293b;
                         border: 1px solid #334155;
-                        border-radius: 10px;
-                        margin-left: 48px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
-                        padding: 5px 9px;
+                        border-radius: 12px;
                     }
                 """)
             else:
-                self.setStyleSheet("""
-                    QFrame {
+                self.card.setStyleSheet("""
+                    QFrame#BubbleCard {
                         background-color: #0b1329;
                         border: 1px solid #1e293b;
-                        border-radius: 10px;
-                        margin-left: 2px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
-                        padding: 6px 10px;
+                        border-radius: 12px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -557,22 +538,34 @@ class MessageBubble(QFrame):
     def adjust_height(self):
         if not self.raw_text and not self.is_image:
             self.text_browser.setFixedHeight(0)
-            self.updateGeometry()
+            self.card.setFixedHeight(0)
+            self.setFixedHeight(0)
             return
-        w = self.text_browser.viewport().width()
-        if w <= 10:
-            w = self.text_browser.width()
-        if w <= 10:
-            if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
-                vp_w = self.parent_assistant.scroll_area.viewport().width()
-                margin = 56 if self.is_user else 16
-                w = max(120, vp_w - margin)
-            else:
-                w = 460
-        doc = self.text_browser.document()
-        doc.setTextWidth(w)
-        h = int(doc.size().height()) + 2
-        self.text_browser.setFixedHeight(max(18, h))
+
+        if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
+            vp_w = self.parent_assistant.scroll_area.viewport().width()
+        else:
+            vp_w = 540
+
+        if self.is_user:
+            max_w = max(180, int(vp_w * 0.75))
+            self.text_browser.document().setTextWidth(-1)
+            ideal_w = int(self.text_browser.document().idealWidth()) + 12
+            actual_w = min(max_w, max(40, ideal_w))
+            self.text_browser.setFixedWidth(actual_w)
+            self.text_browser.document().setTextWidth(actual_w)
+            doc_h = self.text_browser.document().documentLayout().documentSize().height()
+            self.text_browser.setFixedHeight(int(doc_h) + 4)
+        else:
+            available_w = max(240, vp_w - 36)
+            self.text_browser.setMinimumWidth(0)
+            self.text_browser.setMaximumWidth(16777215)
+            self.text_browser.document().setTextWidth(available_w)
+            doc_h = self.text_browser.document().documentLayout().documentSize().height()
+            self.text_browser.setFixedHeight(int(doc_h) + 6)
+
+        self.card.adjustSize()
+        self.adjustSize()
         self.updateGeometry()
 
 
@@ -622,6 +615,8 @@ class NativeAssistant(QMainWindow):
         self.signals.stream_chunk.connect(self.on_stream_chunk)
         self.signals.stream_finished.connect(self.on_stream_finished)
         self.signals.voice_transcribed.connect(self.on_voice_transcribed)
+        self.signals.voice_status_signal.connect(self.on_voice_status)
+        self.signals.voice_finished_signal.connect(self.on_voice_finished)
         self.signals.show_window_signal.connect(self.show_and_activate)
         self.signals.toggle_window_signal.connect(self.toggle_visibility)
         self.signals.trigger_camera_signal.connect(self.capture_screen_and_analyze)
@@ -1489,9 +1484,25 @@ class NativeAssistant(QMainWindow):
         threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
     def start_voice_input(self):
-        if not SPEECH_AVAILABLE or self.is_listening:
+        if not SPEECH_AVAILABLE:
+            self.status_pill.setText("⚠️ SpeechRecognition or pyaudio not installed")
+            self.status_pill.show()
+            QTimer.singleShot(3000, self.status_pill.hide)
+            return
+        if self.is_listening:
             return
         self.is_listening = True
+        self.voice_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ef4444;
+                color: white;
+                border: 2px solid #fca5a5;
+                border-radius: 21px;
+                font-size: 16px;
+            }
+        """)
+        self.status_pill.setText("🎙️ Listening... Speak now")
+        self.status_pill.show()
 
         def listen_worker():
             try:
@@ -1499,23 +1510,51 @@ class NativeAssistant(QMainWindow):
                 r.pause_threshold = 0.8
                 r.dynamic_energy_threshold = True
                 with sr.Microphone() as src:
-                    r.adjust_for_ambient_noise(src, duration=0.3)
-                    audio = r.listen(src, timeout=5, phrase_time_limit=15)
+                    r.adjust_for_ambient_noise(src, duration=0.25)
+                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak now", "active")
+                    audio = r.listen(src, timeout=6, phrase_time_limit=15)
                 
+                self.signals.voice_status_signal.emit("✨ Transcribing voice...", "transcribing")
                 text = ""
                 try:
                     text = r.recognize_google(audio, language="en-IN")
                 except Exception:
                     text = r.recognize_google(audio, language="en-US")
                 
-                if text:
-                    self.signals.voice_transcribed.emit(text)
+                if text and text.strip():
+                    self.signals.voice_transcribed.emit(text.strip())
+                else:
+                    self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
             except Exception as e:
                 print(f"Voice error: {e}")
+                self.signals.voice_status_signal.emit("⚠️ Mic timed out or quiet", "error")
             finally:
                 self.is_listening = False
+                self.signals.voice_finished_signal.emit()
 
         threading.Thread(target=listen_worker, daemon=True).start()
+
+    def on_voice_status(self, text, status_type):
+        self.status_pill.setText(text)
+        self.status_pill.show()
+        if status_type == "error":
+            QTimer.singleShot(2500, self.status_pill.hide)
+
+    def on_voice_finished(self):
+        self.voice_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                color: white;
+                border: none;
+                border-radius: 21px;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+        """)
+        if not self.is_listening and "Listening" in self.status_pill.text():
+            self.status_pill.hide()
 
     def on_voice_transcribed(self, text):
         self.text_input.setText(text)
