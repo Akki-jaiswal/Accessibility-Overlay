@@ -88,7 +88,7 @@ class CompactToggleSwitch(QWidget):
         self.is_checked = is_checked
         self.label_text = label_text
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(58, 36)
+        self.setFixedSize(68, 34)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -111,7 +111,7 @@ class CompactToggleSwitch(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        pill_w, pill_h = 32, 16
+        pill_w, pill_h = 28, 14
         pill_x = (self.width() - pill_w) // 2
         pill_y = 2
 
@@ -119,32 +119,32 @@ class CompactToggleSwitch(QWidget):
             # Active Blue Pill
             painter.setBrush(QColor("#2563eb"))
             painter.setPen(QColor("#3b82f6"))
-            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 8, 8)
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 7, 7)
 
             # White Knob on Right
             painter.setBrush(QColor("#ffffff"))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(pill_x + pill_w - 14, pill_y + 2, 12, 12)
+            painter.drawEllipse(pill_x + pill_w - 12, pill_y + 2, 10, 10)
 
             # Label Text (Sky Blue)
             painter.setPen(QColor("#38bdf8"))
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
+            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.DemiBold))
         else:
             # Inactive Slate Pill
             painter.setBrush(QColor("#334155"))
             painter.setPen(QColor("#475569"))
-            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 8, 8)
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 7, 7)
 
             # White Knob on Left
             painter.setBrush(QColor("#cbd5e1"))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(pill_x + 2, pill_y + 2, 12, 12)
+            painter.drawEllipse(pill_x + 2, pill_y + 2, 10, 10)
 
             # Label Text (Muted Slate)
             painter.setPen(QColor("#94a3b8"))
-            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Medium))
+            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Medium))
 
-        text_rect = self.rect().adjusted(0, 19, 0, 0)
+        text_rect = self.rect().adjusted(0, 18, 0, 0)
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.label_text)
         painter.end()
 
@@ -266,7 +266,7 @@ class HoverSliderBox(QFrame):
         super().leaveEvent(event)
 
 
-# --- Adaptive Message Bubble ---
+# --- Adaptive Static & Responsive Message Bubble ---
 class MessageBubble(QFrame):
     def __init__(self, text, is_user=False, is_image=False, pixmap=None, parent_assistant=None):
         super().__init__(parent_assistant)
@@ -275,11 +275,11 @@ class MessageBubble(QFrame):
         self.raw_text = text
         self.is_user = is_user
         
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(3)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(4)
 
         if is_image and pixmap:
             self.img_label = QLabel()
@@ -291,10 +291,12 @@ class MessageBubble(QFrame):
         self.text_browser = QTextBrowser()
         self.text_browser.setOpenExternalLinks(True)
         self.text_browser.setReadOnly(True)
+        self.text_browser.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
         self.text_browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.text_browser.viewport().setAutoFillBackground(False)
         self.text_browser.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.text_browser.document().setDocumentMargin(0)
         
         self.text_browser.selectionChanged.connect(self.on_selection_changed)
         layout.addWidget(self.text_browser)
@@ -311,22 +313,36 @@ class MessageBubble(QFrame):
 
     def apply_transparency(self, is_transparent):
         if is_transparent:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: transparent;
-                    border: none;
-                    margin-left: 4px;
-                    margin-right: 4px;
-                    margin-top: 2px;
-                    margin-bottom: 2px;
-                }
-            """)
+            if self.is_user:
+                self.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(30, 41, 59, 0.70);
+                        border: 1px solid rgba(51, 65, 85, 0.50);
+                        border-radius: 10px;
+                        margin-left: 36px;
+                        margin-right: 4px;
+                        margin-top: 3px;
+                        margin-bottom: 3px;
+                    }
+                """)
+            else:
+                self.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(15, 23, 42, 0.55);
+                        border: 1px solid rgba(30, 41, 59, 0.45);
+                        border-radius: 10px;
+                        margin-left: 4px;
+                        margin-right: 4px;
+                        margin-top: 3px;
+                        margin-bottom: 3px;
+                    }
+                """)
             self.text_browser.setStyleSheet("""
                 QTextBrowser {
                     background: transparent;
                     border: none;
                     color: #ffffff;
-                    font-size: 13.5px;
+                    font-size: 13px;
                     font-weight: 500;
                     font-family: 'Segoe UI', -apple-system, sans-serif;
                 }
@@ -338,22 +354,22 @@ class MessageBubble(QFrame):
                         background-color: #1e293b;
                         border: 1px solid #334155;
                         border-radius: 10px;
-                        margin-left: 48px;
-                        margin-right: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
+                        margin-left: 36px;
+                        margin-right: 4px;
+                        margin-top: 3px;
+                        margin-bottom: 3px;
                     }
                 """)
             else:
                 self.setStyleSheet("""
                     QFrame {
-                        background-color: #182234;
+                        background-color: #131d2e;
                         border: 1px solid #1e293b;
                         border-radius: 10px;
-                        margin-right: 28px;
-                        margin-left: 2px;
-                        margin-top: 2px;
-                        margin-bottom: 2px;
+                        margin-left: 4px;
+                        margin-right: 4px;
+                        margin-top: 3px;
+                        margin-bottom: 3px;
                     }
                 """)
             self.text_browser.setStyleSheet("""
@@ -381,26 +397,30 @@ class MessageBubble(QFrame):
     def _render_html(self, text, is_transparent=False):
         if not text:
             return ""
+        
+        # Clean up escaped math tokens
+        clean_text = text.replace(r"\$", "$")
+        
         if md_parser:
-            html = md_parser.render(text)
+            html = md_parser.render(clean_text)
         else:
-            html = f"<p>{text}</p>"
+            html = f"<p>{clean_text}</p>"
         
         text_color = "#ffffff" if is_transparent else "#f1f5f9"
-        code_bg = "rgba(15, 23, 42, 0.55)" if is_transparent else "#0b1120"
-        pre_bg = "rgba(15, 23, 42, 0.65)" if is_transparent else "#0b1120"
-        pre_border = "1px solid rgba(51, 65, 85, 0.35)" if is_transparent else "1px solid #1e293b"
+        code_bg = "rgba(15, 23, 42, 0.60)" if is_transparent else "#0b1120"
+        pre_bg = "rgba(15, 23, 42, 0.70)" if is_transparent else "#0b1120"
+        pre_border = "1px solid rgba(51, 65, 85, 0.40)" if is_transparent else "1px solid #1e293b"
 
         styled_html = f"""
         <style>
-            body {{ color: {text_color}; font-family: 'Segoe UI', -apple-system, sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; }}
+            body {{ color: {text_color}; font-family: 'Segoe UI', -apple-system, sans-serif; font-size: 13px; line-height: 1.45; margin: 0; padding: 0; word-wrap: break-word; }}
             p {{ margin: 0 0 5px 0; }}
             strong {{ color: #38bdf8; font-weight: 600; }}
             h1, h2, h3, h4 {{ color: #60a5fa; margin: 5px 0 3px 0; font-size: 13.5px; font-weight: bold; }}
             ul, ol {{ margin: 0 0 5px 14px; padding: 0; }}
             li {{ margin-bottom: 2px; }}
             code {{ background-color: {code_bg}; color: #7dd3fc; padding: 1px 3px; border-radius: 3px; font-family: Consolas, monospace; font-size: 12px; }}
-            pre {{ background-color: {pre_bg}; padding: 6px; border-radius: 5px; border: {pre_border}; margin: 3px 0; }}
+            pre {{ background-color: {pre_bg}; padding: 6px; border-radius: 5px; border: {pre_border}; margin: 3px 0; white-space: pre-wrap; word-wrap: break-word; }}
         </style>
         {html}
         """
@@ -418,19 +438,24 @@ class MessageBubble(QFrame):
         self.text_browser.setHtml(self._render_html(self.raw_text, is_trans))
         self.adjust_height()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.adjust_height()
+
     def adjust_height(self):
-        avail_width = 460
-        if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
-            vp_w = self.parent_assistant.scroll_area.viewport().width()
-            if vp_w > 100:
-                if self.parent_assistant.is_transparent_mode:
-                    avail_width = max(160, vp_w - 32)
-                else:
-                    margin = 68 if self.is_user else 48
-                    avail_width = max(160, vp_w - margin)
+        w = self.text_browser.viewport().width()
+        if w <= 10:
+            w = self.text_browser.width()
+        if w <= 10:
+            if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
+                vp_w = self.parent_assistant.scroll_area.viewport().width()
+                margin = 56 if self.is_user else 28
+                w = max(120, vp_w - margin)
+            else:
+                w = 460
         doc = self.text_browser.document()
-        doc.setTextWidth(avail_width)
-        h = int(doc.size().height()) + 8
+        doc.setTextWidth(w)
+        h = int(doc.size().height()) + 4
         self.text_browser.setFixedHeight(max(20, h))
         self.updateGeometry()
 
@@ -637,17 +662,20 @@ class NativeAssistant(QMainWindow):
         # ==========================================
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.scroll_area.setStyleSheet("""
             QScrollArea { border: none; background: transparent; }
             QScrollBar:vertical {
                 border: none;
-                background: rgba(15, 23, 42, 0.2);
+                background: transparent;
                 width: 4px;
-                border-radius: 2px;
+                margin: 0;
             }
-            QScrollBar::handle:vertical { background: #475569; border-radius: 2px; }
-            QScrollBar::handle:vertical:hover { background: #64748b; }
+            QScrollBar::handle:vertical { background: rgba(100, 116, 139, 0.5); border-radius: 2px; min-height: 20px; }
+            QScrollBar::handle:vertical:hover { background: rgba(148, 163, 184, 0.8); }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
         """)
 
         self.chat_widget = QWidget()
