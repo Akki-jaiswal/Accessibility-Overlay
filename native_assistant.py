@@ -600,6 +600,11 @@ class NativeAssistant(QMainWindow):
         self.selection_popup = SelectionActionPopup()
         self.selection_popup.action_triggered.connect(self.on_selection_action)
 
+        self._native_transparent_active = False
+        self.type_through_timer = QTimer(self)
+        self.type_through_timer.setInterval(40)
+        self.type_through_timer.timeout.connect(self._poll_type_through_hover)
+
         self.init_ai()
         self.init_ui()
         self.init_tray()
@@ -1213,26 +1218,74 @@ class NativeAssistant(QMainWindow):
     def toggle_transparency(self):
         self.signals.transparency_toggled_signal.emit(not self.is_transparent_mode)
 
+    def _set_native_click_through(self, enable=True):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            WS_EX_TRANSPARENT = 0x00000020
+            WS_EX_LAYERED = 0x00080000
+
+            if ctypes.sizeof(ctypes.c_void_p) == 8:
+                GetWindowLong = user32.GetWindowLongPtrW
+                SetWindowLong = user32.SetWindowLongPtrW
+                GetWindowLong.restype = ctypes.c_int64
+                SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_int64]
+                SetWindowLong.restype = ctypes.c_int64
+            else:
+                GetWindowLong = user32.GetWindowLongW
+                SetWindowLong = user32.SetWindowLongW
+                GetWindowLong.restype = ctypes.c_long
+                SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_long]
+                SetWindowLong.restype = ctypes.c_long
+
+            hwnd = wintypes.HWND(int(self.winId()))
+            current_style = GetWindowLong(hwnd, GWL_EXSTYLE)
+            if enable:
+                new_style = current_style | WS_EX_TRANSPARENT | WS_EX_LAYERED
+            else:
+                new_style = (current_style | WS_EX_LAYERED) & ~WS_EX_TRANSPARENT
+            SetWindowLong(hwnd, GWL_EXSTYLE, new_style)
+        except Exception as e:
+            print(f"Error setting native click-through: {e}")
+
+    def _poll_type_through_hover(self):
+        if not self.is_click_through or not self.isVisible():
+            return
+        
+        cursor_pos = QCursor.pos()
+        win_rect = self.geometry()
+        
+        if win_rect.contains(cursor_pos):
+            rel_y = cursor_pos.y() - win_rect.y()
+            # If in Header (<= 42px) or Footer Dock (>= height - 52px), make interactive for clicks/toggles
+            in_interactive_zone = (rel_y <= 42) or (rel_y >= self.height() - 52)
+            if in_interactive_zone:
+                if self._native_transparent_active:
+                    self._set_native_click_through(False)
+                    self._native_transparent_active = False
+            else:
+                if not self._native_transparent_active:
+                    self._set_native_click_through(True)
+                    self._native_transparent_active = True
+        else:
+            if not self._native_transparent_active:
+                self._set_native_click_through(True)
+                self._native_transparent_active = True
+
     def set_type_through(self, enabled):
         self.is_click_through = enabled
         self.type_through_switch.set_checked(enabled)
         
-        # Make the middle scroll area and chat transparent to mouse clicks
-        self.scroll_area.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-        if self.scroll_area.viewport():
-            self.scroll_area.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-        self.chat_widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-        
-        # Header, dock, and toggle switch remain 100% clickable so you can turn it off anytime!
-        for i in range(self.chat_layout.count()):
-            item = self.chat_layout.itemAt(i)
-            widget = item.widget() if item else None
-            if widget:
-                widget.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-                if hasattr(widget, 'text_browser'):
-                    widget.text_browser.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
-                    if widget.text_browser.viewport():
-                        widget.text_browser.viewport().setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enabled)
+        if enabled:
+            self._set_native_click_through(True)
+            self._native_transparent_active = True
+            self.type_through_timer.start()
+        else:
+            self.type_through_timer.stop()
+            self._set_native_click_through(False)
+            self._native_transparent_active = False
         
         self.apply_container_style()
         self.main_container.update()
@@ -1505,6 +1558,10 @@ class NativeAssistant(QMainWindow):
         trans_action = QAction("⚪ Toggle Transparent", self)
         trans_action.triggered.connect(self.toggle_transparency)
         tray_menu.addAction(trans_action)
+
+        type_through_action = QAction("🖱️ Toggle Type-Through", self)
+        type_through_action.triggered.connect(self.toggle_type_through_global)
+        tray_menu.addAction(type_through_action)
 
         tray_menu.addSeparator()
         key_action = QAction("⚙️ Set API Key", self)
