@@ -870,13 +870,10 @@ class NativeAssistant(QMainWindow):
 
     def apply_container_style(self):
         if self.is_transparent_mode:
-            if self.is_click_through:
-                bg_alpha = 0
-            else:
-                # Controlled by slider: 0% transparent (solid dark 240) to 100% transparent (clear 8)
-                transparency_factor = self.opacity_val / 100.0
-                raw_alpha = int((1.0 - transparency_factor) * 240)
-                bg_alpha = max(8, raw_alpha)
+            # Controlled strictly by slider: 0% transparent (solid dark 240) to 100% transparent (clear 8)
+            transparency_factor = self.opacity_val / 100.0
+            raw_alpha = int((1.0 - transparency_factor) * 240)
+            bg_alpha = max(8, raw_alpha)
 
             border_alpha = max(0, min(200, int((1.0 - (self.opacity_val / 100.0)) * 180)))
             border_style = f"1px solid rgba(51, 65, 85, {border_alpha})" if border_alpha > 20 else "none"
