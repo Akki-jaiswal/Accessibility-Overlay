@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QPoint, pyqtSignal, QObject, QTimer, QBuffer, QIODevice, QEvent
 from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QGuiApplication, QAction, QCursor
+from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PIL import Image
 
 try:
@@ -40,6 +41,7 @@ except ImportError:
     GENAI_AVAILABLE = False
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+LOCAL_SERVER_NAME = "AuraAssistantSingleInstanceServer"
 
 
 def load_config():
@@ -50,7 +52,7 @@ def load_config():
     }
     if os.path.exists(CONFIG_PATH):
         try:
-            with open(CONFIG_PATH, "r") as f:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 defaults.update(data)
         except Exception:
@@ -60,7 +62,7 @@ def load_config():
 
 def save_config(cfg):
     try:
-        with open(CONFIG_PATH, "w") as f:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
     except Exception as e:
         print(f"Error saving config: {e}")
@@ -77,7 +79,7 @@ class WorkerSignals(QObject):
     type_through_toggled_signal = pyqtSignal(bool)
 
 
-# --- Toggle Switch with Label Below & Full Hit Area ---
+# --- Precision Painted Toggle Switch with Animated Knob ---
 class CompactToggleSwitch(QWidget):
     toggled = pyqtSignal(bool)
 
@@ -86,26 +88,7 @@ class CompactToggleSwitch(QWidget):
         self.is_checked = is_checked
         self.label_text = label_text
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(2)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # Pill switch representation
-        self.switch_btn = QPushButton()
-        self.switch_btn.setFixedSize(32, 18)
-        self.switch_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.switch_btn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.switch_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        # Label underneath
-        self.label = QLabel(label_text)
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        layout.addWidget(self.label, alignment=Qt.AlignmentFlag.AlignCenter)
-
-        self.update_style()
+        self.setFixedSize(58, 36)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -116,33 +99,54 @@ class CompactToggleSwitch(QWidget):
 
     def toggle(self):
         self.is_checked = not self.is_checked
-        self.update_style()
+        self.update()
         self.toggled.emit(self.is_checked)
 
     def set_checked(self, checked):
         if self.is_checked != checked:
             self.is_checked = checked
-            self.update_style()
+            self.update()
 
-    def update_style(self):
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        pill_w, pill_h = 32, 16
+        pill_x = (self.width() - pill_w) // 2
+        pill_y = 2
+
         if self.is_checked:
-            self.switch_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #3b82f6;
-                    border: 1px solid #60a5fa;
-                    border-radius: 9px;
-                }
-            """)
-            self.label.setStyleSheet("color: #38bdf8; font-size: 10px; font-weight: 600;")
+            # Active Blue Pill
+            painter.setBrush(QColor("#2563eb"))
+            painter.setPen(QColor("#3b82f6"))
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 8, 8)
+
+            # White Knob on Right
+            painter.setBrush(QColor("#ffffff"))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(pill_x + pill_w - 14, pill_y + 2, 12, 12)
+
+            # Label Text (Sky Blue)
+            painter.setPen(QColor("#38bdf8"))
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
         else:
-            self.switch_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #334155;
-                    border: 1px solid #475569;
-                    border-radius: 9px;
-                }
-            """)
-            self.label.setStyleSheet("color: #94a3b8; font-size: 10px; font-weight: 500;")
+            # Inactive Slate Pill
+            painter.setBrush(QColor("#334155"))
+            painter.setPen(QColor("#475569"))
+            painter.drawRoundedRect(pill_x, pill_y, pill_w, pill_h, 8, 8)
+
+            # White Knob on Left
+            painter.setBrush(QColor("#cbd5e1"))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(pill_x + 2, pill_y + 2, 12, 12)
+
+            # Label Text (Muted Slate)
+            painter.setPen(QColor("#94a3b8"))
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Medium))
+
+        text_rect = self.rect().adjusted(0, 19, 0, 0)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self.label_text)
+        painter.end()
 
 
 # --- Floating Quick Action Tooltip (Explain / What / How) ---
@@ -209,7 +213,7 @@ class HoverSliderBox(QFrame):
         self.setMouseTracking(True)
         self.setStyleSheet("""
             QFrame {
-                background-color: rgba(30, 41, 59, 0.88);
+                background-color: rgba(30, 41, 59, 0.90);
                 border: 1px solid #334155;
                 border-radius: 12px;
                 padding: 1px 6px;
@@ -493,6 +497,7 @@ class NativeAssistant(QMainWindow):
     def init_ui(self):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMouseTracking(True)
         
         w, h = self.SIZES[0]
         self.resize(w, h)
@@ -500,6 +505,7 @@ class NativeAssistant(QMainWindow):
 
         self.main_container = QWidget(self)
         self.main_container.setObjectName("MainContainer")
+        self.main_container.setMouseTracking(True)
         self.apply_container_style()
 
         # Shadow effect (disabled during transparent mode to prevent dark murky boxes)
@@ -726,7 +732,7 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.input_card)
 
         # ==========================================
-        # 4. BOTTOM DOCK (Separated Floating Action Buttons)
+        # 4. BOTTOM DOCK (Clean Separated Floating Action Buttons)
         # ==========================================
         self.dock = QWidget()
         self.dock.setObjectName("DockWidget")
@@ -751,7 +757,7 @@ class NativeAssistant(QMainWindow):
 
         dock_layout.addStretch()
 
-        # Center Action Buttons (Built as 3 distinct circular buttons, NOT a shared box)
+        # Center Action Buttons (3 distinct circular buttons)
         self.cam_btn = QPushButton("📷")
         self.cam_btn.setToolTip("1-Click Screen Capture (Ctrl+Shift+S)")
         self.cam_btn.setFixedSize(36, 36)
@@ -816,7 +822,7 @@ class NativeAssistant(QMainWindow):
         self.type_through_switch.hide()
         dock_layout.addWidget(self.type_through_switch)
 
-        # Right: Transparent Switch with Label Below
+        # Right: Transparent Switch with Painted Knob
         self.trans_switch = CompactToggleSwitch("Transparent", is_checked=False)
         self.trans_switch.toggled.connect(self.set_transparency)
         dock_layout.addWidget(self.trans_switch)
@@ -1287,6 +1293,28 @@ class NativeAssistant(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # Enforce Single-Instance to avoid duplicate overlapping windows
+    socket = QLocalSocket()
+    socket.connectToServer(LOCAL_SERVER_NAME)
+    if socket.waitForConnected(500):
+        # Already running! Send wake-up signal and exit cleanly
+        socket.write(b"WAKEUP\n")
+        socket.waitForBytesWritten(500)
+        sys.exit(0)
+
+    local_server = QLocalServer()
+    local_server.removeServer(LOCAL_SERVER_NAME)
+    local_server.listen(LOCAL_SERVER_NAME)
+
     assistant = NativeAssistant()
+
+    def on_new_connection():
+        client_sock = local_server.nextPendingConnection()
+        if client_sock:
+            assistant.signals.show_window_signal.emit()
+            client_sock.close()
+
+    local_server.newConnection.connect(on_new_connection)
     assistant.show()
     sys.exit(app.exec())
