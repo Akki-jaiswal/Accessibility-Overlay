@@ -1531,43 +1531,6 @@ class NativeAssistant(QMainWindow):
     def mouseReleaseEvent(self, event):
         self.drag_position = None
 
-    def nativeEvent(self, eventType, message):
-        if eventType == b"windows_generic_MSG" or eventType == "windows_generic_MSG":
-            import ctypes
-            from ctypes import wintypes
-            
-            class MSG(ctypes.Structure):
-                _fields_ = [
-                    ("hwnd", wintypes.HWND),
-                    ("message", wintypes.UINT),
-                    ("wParam", wintypes.WPARAM),
-                    ("lParam", wintypes.LPARAM),
-                    ("time", wintypes.DWORD),
-                    ("pt", wintypes.POINT)
-                ]
-            
-            try:
-                msg = MSG.from_address(int(message))
-                WM_NCHITTEST = 0x0084
-                HTTRANSPARENT = -1
-                HTCLIENT = 1
-
-                if msg.message == WM_NCHITTEST and self.is_click_through:
-                    y_screen = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                    win_pos = self.pos()
-                    rel_y = y_screen - win_pos.y()
-                    
-                    # Top header (<= 42px) and bottom dock (>= height - 52px) stay interactive
-                    if rel_y <= 42 or rel_y >= (self.height() - 52):
-                        return True, HTCLIENT
-                    else:
-                        # Middle content area is fully transparent to mouse events
-                        return True, HTTRANSPARENT
-            except Exception:
-                pass
-
-        return super().nativeEvent(eventType, message)
-
     def setup_hotkeys(self):
         if KEYBOARD_AVAILABLE:
             try:
