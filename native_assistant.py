@@ -4,6 +4,7 @@ import io
 import json
 import threading
 import time
+import re
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QScrollArea, QFrame, QTextBrowser,
