@@ -467,12 +467,93 @@ class MessageBubble(QWidget):
         elif self.parent_assistant:
             self.parent_assistant.selection_popup.hide()
 
+    def _format_math(self, text):
+        if not text:
+            return ""
+        
+        # 1. Replace common LaTeX tokens with clean readable Unicode symbols
+        replacements = [
+            (r"\\times", "×"),
+            (r"\\cdot", "·"),
+            (r"\\leq", "≤"),
+            (r"\\le\b", "≤"),
+            (r"\\geq", "≥"),
+            (r"\\ge\b", "≥"),
+            (r"\\approx", "≈"),
+            (r"\\neq", "≠"),
+            (r"\\ne\b", "≠"),
+            (r"\\pm", "±"),
+            (r"\\infty", "∞"),
+            (r"\\dots", "…"),
+            (r"\\cdots", "⋯"),
+            (r"\\ldots", "…"),
+            (r"\\theta", "θ"),
+            (r"\\Theta", "Θ"),
+            (r"\\omega", "ω"),
+            (r"\\Omega", "Ω"),
+            (r"\\alpha", "α"),
+            (r"\\beta", "β"),
+            (r"\\gamma", "γ"),
+            (r"\\lambda", "λ"),
+            (r"\\pi", "π"),
+            (r"\\sqrt\{([^}]+)\}", r"√(\1)"),
+            (r"\\frac\{([^}]+)\}\{([^}]+)\}", r"(\1 / \2)"),
+            (r"\\left\(", "("),
+            (r"\\right\)", ")"),
+            (r"\\left\[", "["),
+            (r"\\right\]", "]"),
+            (r"\\left\\{", "{"),
+            (r"\\right\\}", "}"),
+            (r"\\mathcal\{([A-Za-z])\}", r"\1"),
+            (r"\\mathbf\{([^}]+)\}", r"**\1**"),
+            (r"\\textbf\{([^}]+)\}", r"**\1**"),
+            (r"\\textit\{([^}]+)\}", r"*\1*"),
+            (r"\\text\{([^}]+)\}", r"\1"),
+            (r"\\mathrm\{([^}]+)\}", r"\1"),
+            (r"\\mathit\{([^}]+)\}", r"\1"),
+            (r"\\log_2", "log₂"),
+            (r"\\log", "log"),
+            (r"\\ln", "ln"),
+        ]
+        for pat, repl in replacements:
+            text = re.sub(pat, repl, text)
+
+        # 2. Exponents to clean Unicode superscripts (e.g. M^2 -> M², 2^N -> 2ᴺ)
+        sup_dict = {
+            '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+            '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+            'n': 'ⁿ', 'N': 'ᴺ', 'k': 'ᵏ', 'K': 'ᴷ', 'm': 'ᵐ',
+            'M': 'ᴹ', 'x': 'ˣ', 'i': 'ⁱ', 't': 'ᵗ', '+': '⁺', '-': '⁻'
+        }
+        def sup_replace(m):
+            val = m.group(1) if m.group(1) is not None else m.group(2)
+            return ''.join(sup_dict.get(c, c) for c in val)
+
+        text = re.sub(r"\^\{([0-9a-zA-Z\+\-\(\)]+)\}", sup_replace, text)
+        text = re.sub(r"\^([0-9a-zA-Z])\b", sup_replace, text)
+
+        # 3. Clean inline & block math delimiters ($...$ / $$...$$)
+        def math_delim_replace(m):
+            inner = m.group(1).strip()
+            if not inner:
+                return ""
+            # If it's a Big-O / Theta / Omega expression, format as bold
+            if re.match(r"^[OΘΩ]\s*\(", inner):
+                return f"**{inner}**"
+            return inner
+
+        text = re.sub(r"\$\$(.+?)\$\$", math_delim_replace, text, flags=re.DOTALL)
+        text = re.sub(r"\$([^\$\n]+?)\$", math_delim_replace, text)
+        text = text.replace(r"\$", "$")
+
+        return text
+
     def _render_html(self, text, is_transparent=False):
         if not text:
             return ""
         
-        # Clean up escaped math tokens
-        clean_text = text.replace(r"\$", "$")
+        # Convert raw LaTeX formulas into clean, human-readable Unicode & bold markdown
+        clean_text = self._format_math(text)
         
         if md_parser:
             html = md_parser.render(clean_text)
@@ -1380,11 +1461,15 @@ class NativeAssistant(QMainWindow):
         system_prompt = (
             f"{persona_instruction}\n"
             "You are an expert real-time AI assistant for technical interviews, coding rounds, and system design.\n\n"
+            "CRITICAL FORMATTING RULES FOR MATH & COMPLEXITY:\n"
+            "• DO NOT use LaTeX syntax or math delimiters ($ or $$ or \\times or \\cdot or \\le).\n"
+            "• ALWAYS use clean, human-readable plain text / Unicode notation: e.g. **O(M × N)**, **O(M² × N)**, **O(N log N)**, **O(V + E)**, **O(1)**, 26 × M, ≤, ≥.\n"
+            "• ALWAYS bold Big-O notation like **O(N)**, **O(M × N)**, **O(M² × N)**.\n\n"
             "When explaining an algorithm, coding problem, or architecture, ALWAYS structure your response using the **HEROS Framework**:\n"
             "• **H — Hypothesis**: State the core premise, invariant, or approach directly in 1-2 sentences.\n"
             "• **E — Example**: Provide a concrete walkthrough, test case, or step-by-step trace.\n"
             "• **R — Resolution**: Step-by-step implementation logic and clean, optimal code.\n"
-            "• **O — Optimization**: Time and Space complexity analysis (e.g., O(V+E) vs O(V^2)) and trade-offs.\n"
+            "• **O — Optimization**: Time and Space complexity analysis (e.g., **O(M² × N)** time, **O(M × N)** space) and trade-offs.\n"
             "• **S — Summary**: A punchy, spoken 1-2 sentence response the candidate can say aloud to an interviewer.\n\n"
             "When analyzing a screen capture image, ALWAYS structure with:\n"
             "• **Final Answer:** Direct, actionable solution.\n"
