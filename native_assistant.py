@@ -501,9 +501,13 @@ class MessageBubble(QWidget):
 
     def update_content(self, text):
         self.raw_text = text
-        if self.raw_text:
-            self.show()
         is_trans = self.parent_assistant.is_transparent_mode if self.parent_assistant else False
+        if self.raw_text or self.is_image:
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
+            self.card.setMinimumSize(0, 0)
+            self.card.setMaximumSize(16777215, 16777215)
+            self.show()
         self.apply_transparency(is_trans)
         self.text_browser.setHtml(self._render_html(text, is_trans))
         self.adjust_height()
@@ -512,7 +516,11 @@ class MessageBubble(QWidget):
         was_empty = not self.raw_text
         self.raw_text += new_text
         is_trans = self.parent_assistant.is_transparent_mode if self.parent_assistant else False
-        if was_empty and self.raw_text:
+        if was_empty and (self.raw_text or self.is_image):
+            self.setMinimumSize(0, 0)
+            self.setMaximumSize(16777215, 16777215)
+            self.card.setMinimumSize(0, 0)
+            self.card.setMaximumSize(16777215, 16777215)
             self.show()
             self.apply_transparency(is_trans)
         self.text_browser.setHtml(self._render_html(self.raw_text, is_trans))
@@ -524,9 +532,7 @@ class MessageBubble(QWidget):
 
     def adjust_height(self):
         if not self.raw_text and not self.is_image:
-            self.text_browser.setFixedHeight(0)
-            self.card.setFixedHeight(0)
-            self.setFixedHeight(0)
+            self.hide()
             return
 
         if self.parent_assistant and hasattr(self.parent_assistant, 'scroll_area'):
@@ -537,30 +543,38 @@ class MessageBubble(QWidget):
         if vp_w <= 0:
             vp_w = 540
 
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(16777215, 16777215)
+        self.card.setMinimumSize(0, 0)
+        self.card.setMaximumSize(16777215, 16777215)
+
         if self.is_user:
             max_w = max(180, int(vp_w * 0.78))
             self.text_browser.document().setTextWidth(-1)
             ideal_w = int(self.text_browser.document().idealWidth()) + 18
-            actual_text_w = min(max_w - 20, max(40, ideal_w))
+            actual_text_w = min(max_w - 24, max(40, ideal_w))
             self.text_browser.setFixedWidth(actual_text_w)
             self.text_browser.document().setTextWidth(actual_text_w)
             doc_h = self.text_browser.document().documentLayout().documentSize().height()
             self.text_browser.setFixedHeight(int(doc_h) + 6)
-            self.card.setFixedWidth(actual_text_w + 20)
+            self.card.setFixedWidth(actual_text_w + 24)
         else:
             max_w = max(240, vp_w - 24)
             self.text_browser.document().setTextWidth(-1)
             ideal_w = int(self.text_browser.document().idealWidth()) + 24
             actual_card_w = min(max_w, max(120, ideal_w))
-            actual_text_w = max(40, actual_card_w - 20)
+            actual_text_w = max(40, actual_card_w - 24)
             self.text_browser.setFixedWidth(actual_text_w)
             self.text_browser.document().setTextWidth(actual_text_w)
             doc_h = self.text_browser.document().documentLayout().documentSize().height()
             self.text_browser.setFixedHeight(int(doc_h) + 6)
             self.card.setFixedWidth(actual_card_w)
 
-        self.card.adjustSize()
-        self.adjustSize()
+        chips_h = self.chips_widget.sizeHint().height() if (self.chips_widget and self.chips_widget.isVisible()) else 0
+        img_h = self.img_label.height() if (self.is_image and hasattr(self, 'img_label')) else 0
+        total_card_h = int(doc_h) + chips_h + img_h + 20
+        self.card.setFixedHeight(total_card_h)
+        self.setFixedHeight(total_card_h + 6)
         self.updateGeometry()
 
 
