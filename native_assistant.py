@@ -622,23 +622,6 @@ class NativeAssistant(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.setup_stealth_display_affinity()
-
-    def setup_stealth_display_affinity(self):
-        # Native Windows Display Affinity Shield: Excludes overlay window from screen recording
-        try:
-            import ctypes
-            from ctypes import wintypes
-            user32 = ctypes.windll.user32
-            user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
-            user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
-            hwnd = wintypes.HWND(int(self.winId()))
-            # WDA_EXCLUDEFROMCAPTURE = 0x00000011 (Windows 10 2004+ / Windows 11)
-            res = user32.SetWindowDisplayAffinity(hwnd, 0x00000011)
-            if not res:
-                user32.SetWindowDisplayAffinity(hwnd, 0x00000001)
-        except Exception:
-            pass
 
     def init_ai(self):
         api_key = self.config.get("GEMINI_API_KEY", "")
