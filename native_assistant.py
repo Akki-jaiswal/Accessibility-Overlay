@@ -386,9 +386,11 @@ class MessageBubble(QWidget):
             self.chips_widget = None
 
         if is_user:
-            outer_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignRight)
+            outer_layout.addStretch()
+            outer_layout.addWidget(self.card)
         else:
-            outer_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignLeft)
+            outer_layout.addWidget(self.card)
+            outer_layout.addStretch()
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         
@@ -1340,10 +1342,10 @@ class NativeAssistant(QMainWindow):
 
     def _stream_response(self, prompt, image_bytes=None):
         candidate_models = [
-            "gemini-flash-lite-latest",
-            "gemini-flash-latest",
-            "gemini-pro-latest",
-            "gemini-2.5-flash-lite"
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-3.1-pro-preview"
         ]
 
         success = False
