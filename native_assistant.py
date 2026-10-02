@@ -388,7 +388,7 @@ class MessageBubble(QWidget):
         if is_user:
             outer_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignRight)
         else:
-            outer_layout.addWidget(self.card)
+            outer_layout.addWidget(self.card, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.apply_transparency(parent_assistant.is_transparent_mode if parent_assistant else False)
         
@@ -418,18 +418,12 @@ class MessageBubble(QWidget):
 
     def apply_transparency(self, is_transparent):
         if is_transparent:
-            if self.is_user:
-                self.card.setStyleSheet("""
-                    background-color: rgba(30, 41, 59, 0.92);
-                    border: 1px solid rgba(71, 85, 105, 0.65);
-                    border-radius: 12px;
-                """)
-            else:
-                self.card.setStyleSheet("""
-                    background-color: rgba(10, 15, 29, 0.92);
-                    border: 1px solid rgba(51, 65, 85, 0.55);
-                    border-radius: 12px;
-                """)
+            # Unified high-contrast dark card backdrop for all message bubbles
+            self.card.setStyleSheet("""
+                background-color: rgba(10, 15, 29, 0.92);
+                border: 1px solid rgba(51, 65, 85, 0.55);
+                border-radius: 12px;
+            """)
             self.text_browser.setStyleSheet("""
                 QTextBrowser {
                     background: transparent;
@@ -441,18 +435,12 @@ class MessageBubble(QWidget):
                 }
             """)
         else:
-            if self.is_user:
-                self.card.setStyleSheet("""
-                    background-color: #1e293b;
-                    border: 1px solid #334155;
-                    border-radius: 12px;
-                """)
-            else:
-                self.card.setStyleSheet("""
-                    background-color: #0b1329;
-                    border: 1px solid #1e293b;
-                    border-radius: 12px;
-                """)
+            # Unified solid dark card in standard mode
+            self.card.setStyleSheet("""
+                background-color: #0b1329;
+                border: 1px solid #1e293b;
+                border-radius: 12px;
+            """)
             self.text_browser.setStyleSheet("""
                 QTextBrowser {
                     background: transparent;
@@ -544,22 +532,30 @@ class MessageBubble(QWidget):
         else:
             vp_w = 540
 
+        if vp_w <= 0:
+            vp_w = 540
+
         if self.is_user:
-            max_w = max(180, int(vp_w * 0.75))
+            max_w = max(180, int(vp_w * 0.78))
             self.text_browser.document().setTextWidth(-1)
-            ideal_w = int(self.text_browser.document().idealWidth()) + 12
-            actual_w = min(max_w, max(40, ideal_w))
-            self.text_browser.setFixedWidth(actual_w)
-            self.text_browser.document().setTextWidth(actual_w)
-            doc_h = self.text_browser.document().documentLayout().documentSize().height()
-            self.text_browser.setFixedHeight(int(doc_h) + 4)
-        else:
-            available_w = max(240, vp_w - 36)
-            self.text_browser.setMinimumWidth(0)
-            self.text_browser.setMaximumWidth(16777215)
-            self.text_browser.document().setTextWidth(available_w)
+            ideal_w = int(self.text_browser.document().idealWidth()) + 18
+            actual_text_w = min(max_w - 20, max(40, ideal_w))
+            self.text_browser.setFixedWidth(actual_text_w)
+            self.text_browser.document().setTextWidth(actual_text_w)
             doc_h = self.text_browser.document().documentLayout().documentSize().height()
             self.text_browser.setFixedHeight(int(doc_h) + 6)
+            self.card.setFixedWidth(actual_text_w + 20)
+        else:
+            max_w = max(240, vp_w - 24)
+            self.text_browser.document().setTextWidth(-1)
+            ideal_w = int(self.text_browser.document().idealWidth()) + 24
+            actual_card_w = min(max_w, max(120, ideal_w))
+            actual_text_w = max(40, actual_card_w - 20)
+            self.text_browser.setFixedWidth(actual_text_w)
+            self.text_browser.document().setTextWidth(actual_text_w)
+            doc_h = self.text_browser.document().documentLayout().documentSize().height()
+            self.text_browser.setFixedHeight(int(doc_h) + 6)
+            self.card.setFixedWidth(actual_card_w)
 
         self.card.adjustSize()
         self.adjustSize()
