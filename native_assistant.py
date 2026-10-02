@@ -682,6 +682,7 @@ class NativeAssistant(QMainWindow):
         self.active_model_name = "gemini-flash-lite-latest"
         self.current_mode = "manual"
         self.opacity_val = self.config.get("TRANSPARENCY", 65)
+        self.conversation_history = []
 
         # 6-Second Auto-Hide Timer for the Slider
         self.slider_timer = QTimer(self)
@@ -763,9 +764,10 @@ class NativeAssistant(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(6)
 
-        # Bold Back Arrow
+        # Bold Back Arrow (Clear conversation & reset context)
         self.back_btn = QPushButton("←")
         self.back_btn.setFixedSize(26, 26)
+        self.back_btn.setToolTip("Clear conversation & reset context")
         self.back_btn.setStyleSheet("""
             QPushButton {
                 background: transparent;
@@ -776,6 +778,7 @@ class NativeAssistant(QMainWindow):
             }
             QPushButton:hover { color: #f8fafc; }
         """)
+        self.back_btn.clicked.connect(self.clear_conversation)
         header_layout.addWidget(self.back_btn)
 
         # Mode Pill Switch [ Manual | Auto ]
@@ -1413,8 +1416,19 @@ class NativeAssistant(QMainWindow):
         if hasattr(self, 'scroll_bottom_btn'):
             self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 110)
 
+    def clear_conversation(self):
+        self.conversation_history.clear()
+        while self.chat_layout.count() > 1:
+            item = self.chat_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self.add_message("Hi! I'm Aura. Conversation context reset. How can I help?", is_user=False)
+        self.scroll_to_bottom()
+
     def on_selection_action(self, action_type, full_prompt):
         self.add_message(full_prompt, is_user=True)
+        self.conversation_history.append({"role": "user", "text": full_prompt, "image_bytes": None})
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
@@ -1426,6 +1440,7 @@ class NativeAssistant(QMainWindow):
             return
         self.text_input.clear()
         self.add_message(text, is_user=True)
+        self.conversation_history.append({"role": "user", "text": text, "image_bytes": None})
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
@@ -1447,21 +1462,38 @@ class NativeAssistant(QMainWindow):
         success = False
         last_error = ""
 
-        if image_bytes:
-            contents = [
-                prompt,
-                types.Part.from_bytes(
-                    data=image_bytes,
+        # Build full multi-turn context from conversation history (retaining up to last 12 turns)
+        contents = []
+        recent_turns = self.conversation_history[-12:]
+        for turn in recent_turns:
+            parts = []
+            if turn.get("text"):
+                parts.append(types.Part.from_text(text=turn["text"]))
+            if turn.get("image_bytes"):
+                parts.append(types.Part.from_bytes(
+                    data=turn["image_bytes"],
                     mime_type="image/jpeg"
-                )
-            ]
-        else:
-            contents = prompt
+                ))
+            if parts:
+                contents.append(types.Content(role=turn["role"], parts=parts))
+
+        if not contents:
+            if image_bytes:
+                contents = [
+                    prompt,
+                    types.Part.from_bytes(
+                        data=image_bytes,
+                        mime_type="image/jpeg"
+                    )
+                ]
+            else:
+                contents = prompt
 
         persona_instruction = self.config.get("PERSONA", "")
         system_prompt = (
             f"{persona_instruction}\n"
-            "You are an expert real-time AI assistant for technical interviews, coding rounds, and system design.\n\n"
+            "You are an expert real-time AI assistant for technical interviews, coding rounds, and system design.\n"
+            "You maintain full conversational context and memory across follow-up questions, dry-runs, edge-cases, and refactorings.\n\n"
             "CRITICAL FORMATTING RULES FOR MATH & COMPLEXITY:\n"
             "• DO NOT use LaTeX syntax or math delimiters ($ or $$ or \\times or \\cdot or \\le).\n"
             "• ALWAYS use clean, human-readable plain text / Unicode notation: e.g. **O(M × N)**, **O(M² × N)**, **O(N log N)**, **O(V + E)**, **O(1)**, 26 × M, ≤, ≥.\n"
@@ -1514,6 +1546,12 @@ class NativeAssistant(QMainWindow):
         self.status_pill.hide()
         if self.current_ai_bubble:
             self.current_ai_bubble.show_action_chips()
+            if self.current_ai_bubble.raw_text:
+                self.conversation_history.append({
+                    "role": "model",
+                    "text": self.current_ai_bubble.raw_text,
+                    "image_bytes": None
+                })
 
     def capture_screen_and_analyze(self):
         self.status_pill.setText("••• 📸 Capturing screen...")
@@ -1548,6 +1586,12 @@ class NativeAssistant(QMainWindow):
         image_bytes = bytes(buffer.data())
 
         self.add_message("📸 Screen Capture", is_user=True, is_image=True, pixmap=pixmap)
+        prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
+        self.conversation_history.append({
+            "role": "user",
+            "text": prompt,
+            "image_bytes": image_bytes
+        })
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
@@ -1558,7 +1602,6 @@ class NativeAssistant(QMainWindow):
         self.status_pill.show()
 
         self.current_ai_bubble = self.add_message("", is_user=False)
-        prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
         threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
     def start_voice_input(self):
