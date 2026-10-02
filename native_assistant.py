@@ -463,6 +463,7 @@ class MessageBubble(QWidget):
     def on_selection_changed(self):
         selected = self.text_browser.textCursor().selectedText().strip()
         if selected and len(selected) > 2 and self.parent_assistant:
+            self.parent_assistant.clear_all_text_selections(except_browser=self.text_browser)
             cursor_pos = QCursor.pos()
             self.parent_assistant.selection_popup.show_at(QPoint(cursor_pos.x() - 60, cursor_pos.y() - 35), selected)
         elif self.parent_assistant:
@@ -1126,15 +1127,50 @@ class NativeAssistant(QMainWindow):
         container_layout.addWidget(self.dock)
         self.setCentralWidget(self.main_container)
 
-        # Install event filters for smooth header dragging
-        # Install event filters for smooth header & footer dragging
+        # Install event filters for smooth header dragging and global click-anywhere deselection
         self.header.installEventFilter(self)
         self.dock.installEventFilter(self)
         self.brand_label.installEventFilter(self)
+        QApplication.instance().installEventFilter(self)
 
         self.add_message("Hi! I'm Aura. I can help you silently in all meetings, interviews, and code tasks.", is_user=False)
 
+    def clear_all_text_selections(self, except_browser=None):
+        if hasattr(self, 'selection_popup') and self.selection_popup.isVisible():
+            self.selection_popup.hide()
+        if hasattr(self, 'chat_layout'):
+            for i in range(self.chat_layout.count()):
+                item = self.chat_layout.itemAt(i)
+                widget = item.widget() if item else None
+                if isinstance(widget, MessageBubble):
+                    if widget.text_browser != except_browser:
+                        cursor = widget.text_browser.textCursor()
+                        if cursor.hasSelection():
+                            cursor.clearSelection()
+                            widget.text_browser.setTextCursor(cursor)
+
+    def mousePressEvent(self, event):
+        self.clear_all_text_selections()
+        super().mousePressEvent(event)
+
     def eventFilter(self, source, event):
+        if event.type() == QEvent.Type.MouseButtonPress:
+            is_popup = False
+            if hasattr(self, 'selection_popup') and self.selection_popup.isVisible():
+                if source == self.selection_popup or self.selection_popup.isAncestorOf(source):
+                    is_popup = True
+            
+            if not is_popup:
+                clicked_browser = None
+                curr = source
+                while curr:
+                    if isinstance(curr, QTextBrowser):
+                        clicked_browser = curr
+                        break
+                    curr = curr.parent() if hasattr(curr, 'parent') else None
+                
+                self.clear_all_text_selections(except_browser=clicked_browser)
+
         if source in (self.header, self.dock, self.brand_label):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
                 self.drag_position = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
