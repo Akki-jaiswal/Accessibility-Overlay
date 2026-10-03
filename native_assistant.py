@@ -920,9 +920,8 @@ class NativeAssistant(QMainWindow):
             }
         """)
         self.scroll_bottom_btn.clicked.connect(self.scroll_to_bottom)
-        self.scroll_bottom_btn.hide()
-
         self.scroll_area.verticalScrollBar().valueChanged.connect(self.on_scroll_value_changed)
+        self.scroll_area.verticalScrollBar().rangeChanged.connect(self.on_scroll_range_changed)
 
         # ==========================================
         # 3. HELPER TEXT & AUTO-HIDE HOVER SLIDER BAR
@@ -1434,23 +1433,33 @@ class NativeAssistant(QMainWindow):
         QTimer.singleShot(40, self.scroll_to_bottom)
         return bubble
 
-    def scroll_to_bottom(self):
-        self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
-
-    def on_scroll_value_changed(self, val):
-        max_val = self.scroll_area.verticalScrollBar().maximum()
-        if max_val - val > 60:
+    def update_scroll_bottom_btn(self):
+        if not hasattr(self, 'scroll_bottom_btn') or not hasattr(self, 'scroll_area'):
+            return
+        sb = self.scroll_area.verticalScrollBar()
+        max_val = sb.maximum()
+        val = sb.value()
+        if max_val - val > 30:
             self.scroll_bottom_btn.show()
             self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 110)
             self.scroll_bottom_btn.raise_()
         else:
             self.scroll_bottom_btn.hide()
 
+    def scroll_to_bottom(self):
+        self.scroll_area.verticalScrollBar().setValue(self.scroll_area.verticalScrollBar().maximum())
+        self.update_scroll_bottom_btn()
+
+    def on_scroll_value_changed(self, val):
+        self.update_scroll_bottom_btn()
+
+    def on_scroll_range_changed(self, min_val, max_val):
+        self.update_scroll_bottom_btn()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.reflow_bubbles()
-        if hasattr(self, 'scroll_bottom_btn'):
-            self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 110)
+        self.update_scroll_bottom_btn()
 
     def clear_conversation(self):
         self.conversation_history.clear()
@@ -1576,7 +1585,7 @@ class NativeAssistant(QMainWindow):
     def on_stream_chunk(self, chunk):
         if self.current_ai_bubble:
             self.current_ai_bubble.append_text(chunk)
-            self.scroll_to_bottom()
+            self.update_scroll_bottom_btn()
 
     def on_stream_finished(self):
         self.status_pill.hide()
