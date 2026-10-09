@@ -2022,18 +2022,11 @@ class NativeAssistant(QMainWindow):
     def stop_voice_input(self):
         if not self.is_listening:
             return
-        self.manual_voice_stop_requested = True
         self.is_listening = False
-        if hasattr(self, 'active_voice_src') and self.active_voice_src:
-            try:
-                if hasattr(self.active_voice_src, 'stream') and self.active_voice_src.stream:
-                    self.active_voice_src.stream.close()
-            except Exception:
-                pass
+        self.manual_voice_stop_requested = True
         self.update_voice_button_style()
-        self.status_pill.setText("⏹️ Stopped listening")
+        self.status_pill.setText("⏹️ Processing speech...")
         self.status_pill.show()
-        QTimer.singleShot(1500, self.status_pill.hide)
 
     def start_voice_input(self):
         if self.is_generating:
@@ -2054,51 +2047,96 @@ class NativeAssistant(QMainWindow):
         self.status_pill.show()
 
         def listen_worker():
+            frames = []
+            sample_rate = 16000
+            sample_width = 2
             try:
                 r = sr.Recognizer()
-                r.pause_threshold = 1.3
-                r.non_speaking_duration = 0.7
-                r.dynamic_energy_threshold = True
-                r.dynamic_energy_ratio = 1.5
                 with self._get_microphone() as src:
-                    self.active_voice_src = src
-                    if self.manual_voice_stop_requested or not self.is_listening:
-                        return
-                    r.adjust_for_ambient_noise(src, duration=0.4)
-                    r.energy_threshold = max(160, min(r.energy_threshold, 350))
-                    if self.manual_voice_stop_requested or not self.is_listening:
-                        return
-                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak now (Click mic to stop)", "active")
-                    audio = r.listen(src, timeout=10, phrase_time_limit=35)
-                
-                if self.manual_voice_stop_requested or not self.is_listening:
-                    return
-
-                self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
-                text = ""
-                try:
-                    text = r.recognize_google(audio, language="en-US")
-                except Exception:
+                    sample_rate = src.SAMPLE_RATE
+                    sample_width = src.SAMPLE_WIDTH
+                    
                     try:
-                        text = r.recognize_google(audio, language="en-IN")
+                        r.adjust_for_ambient_noise(src, duration=0.25)
                     except Exception:
-                        text = ""
-                
-                if text and text.strip() and not self.manual_voice_stop_requested:
-                    self.signals.voice_transcribed.emit(text.strip())
-                elif not self.manual_voice_stop_requested:
-                    self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
-            except sr.WaitTimeoutError:
-                if not self.manual_voice_stop_requested:
-                    self.signals.voice_status_signal.emit("⚠️ Mic timed out", "error")
+                        pass
+                    energy_threshold = max(180, min(r.energy_threshold, 380))
+                    
+                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak now (Click mic to stop)", "active")
+                    
+                    has_speech_started = False
+                    speech_start_time = None
+                    silence_start_time = None
+                    start_wait_time = time.time()
+                    
+                    # Read audio in small non-blocking chunks; exits cleanly whenever self.is_listening becomes False
+                    while self.is_listening and not self.manual_voice_stop_requested:
+                        try:
+                            buf = src.stream.read(src.CHUNK)
+                        except Exception:
+                            break
+                        
+                        frames.append(buf)
+                        
+                        try:
+                            chunk_energy = sr.audioop.rms(buf, src.SAMPLE_WIDTH)
+                        except Exception:
+                            chunk_energy = 0
+                            
+                        now = time.time()
+                        
+                        if chunk_energy > energy_threshold:
+                            if not has_speech_started:
+                                has_speech_started = True
+                                speech_start_time = now
+                            silence_start_time = None
+                        else:
+                            if has_speech_started:
+                                if silence_start_time is None:
+                                    silence_start_time = now
+                                elif now - silence_start_time >= 1.3:
+                                    # Silence detected after speech -> finished naturally
+                                    break
+                            else:
+                                if now - start_wait_time > 8.0:
+                                    # Initial wait timeout if no speech started
+                                    break
+                                    
+                        if has_speech_started and (now - speech_start_time > 35.0):
+                            break
+                            
             except Exception as e:
-                if not self.manual_voice_stop_requested:
-                    print(f"Voice error: {e}")
-                    self.signals.voice_status_signal.emit("⚠️ Mic timed out or quiet", "error")
+                print(f"Voice recording error: {e}")
             finally:
-                self.active_voice_src = None
                 self.is_listening = False
-                self.signals.voice_finished_signal.emit()
+            
+            # Transcribe captured audio frames safely
+            if frames and len(frames) > 6:
+                self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
+                try:
+                    raw_data = b"".join(frames)
+                    audio_data = sr.AudioData(raw_data, sample_rate, sample_width)
+                    r = sr.Recognizer()
+                    text = ""
+                    try:
+                        text = r.recognize_google(audio_data, language="en-US")
+                    except Exception:
+                        try:
+                            text = r.recognize_google(audio_data, language="en-IN")
+                        except Exception:
+                            text = ""
+                    
+                    if text and text.strip():
+                        self.signals.voice_transcribed.emit(text.strip())
+                    else:
+                        self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
+                except Exception as e:
+                    print(f"Transcription error: {e}")
+                    self.signals.voice_status_signal.emit("⚠️ Could not transcribe", "error")
+            else:
+                self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
+                
+            self.signals.voice_finished_signal.emit()
 
         threading.Thread(target=listen_worker, daemon=True).start()
 
