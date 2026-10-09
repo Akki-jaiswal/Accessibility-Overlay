@@ -208,6 +208,116 @@ class SelectionActionPopup(QFrame):
         self.action_triggered.emit(prompt_prefix, full_prompt)
 
 
+# --- Modern In-App Auto Mode Confirmation Popup ---
+class AutoModeConfirmDialog(QFrame):
+    confirmed = pyqtSignal()
+    cancelled = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            QFrame#AutoDialogCard {
+                background-color: #0b1329;
+                border: 1px solid #334155;
+                border-radius: 14px;
+            }
+        """)
+        self.setObjectName("AutoDialogCard")
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(12)
+
+        # Header with icon
+        header_layout = QHBoxLayout()
+        header_layout.setSpacing(8)
+        
+        icon_label = QLabel("🎙️")
+        icon_label.setStyleSheet("font-size: 18px; background: transparent; border: none;")
+        header_layout.addWidget(icon_label)
+        
+        title_label = QLabel("Enable Auto Meeting Mode?")
+        title_label.setStyleSheet("color: #ffffff; font-size: 13.5px; font-weight: bold; background: transparent; border: none;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        layout.addLayout(header_layout)
+
+        # Body description
+        desc_label = QLabel(
+            "Aura will continuously listen to your meeting/system audio in the background and automatically generate real-time answers when technical or interview questions are heard.<br><br>"
+            "💡 <b>Quick Control:</b> Click the center <b>Mic button</b> (🎙️) at any time to pause or resume listening."
+        )
+        desc_label.setWordWrap(True)
+        desc_label.setStyleSheet("color: #cbd5e1; font-size: 12px; line-height: 1.45; background: transparent; border: none;")
+        layout.addWidget(desc_label)
+
+        # Buttons layout
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(8)
+        btn_layout.addStretch()
+
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_cancel.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #94a3b8;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 6px 14px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #1e293b;
+                color: #f8fafc;
+                border-color: #475569;
+            }
+        """)
+        self.btn_cancel.clicked.connect(self._on_cancel)
+        btn_layout.addWidget(self.btn_cancel)
+
+        self.btn_confirm = QPushButton("Enable Auto Mode")
+        self.btn_confirm.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_confirm.setStyleSheet("""
+            QPushButton {
+                background-color: #10b981;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                padding: 6px 16px;
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #059669;
+            }
+        """)
+        self.btn_confirm.clicked.connect(self._on_confirm)
+        btn_layout.addWidget(self.btn_confirm)
+
+        layout.addLayout(btn_layout)
+
+    def show_centered(self, parent_widget):
+        self.setParent(parent_widget)
+        card_w = min(390, max(300, parent_widget.width() - 36))
+        self.setFixedWidth(card_w)
+        self.adjustSize()
+        x = (parent_widget.width() - self.width()) // 2
+        y = (parent_widget.height() - self.height()) // 2 - 20
+        self.move(max(10, x), max(10, y))
+        self.show()
+        self.raise_()
+
+    def _on_confirm(self):
+        self.hide()
+        self.confirmed.emit()
+
+    def _on_cancel(self):
+        self.hide()
+        self.cancelled.emit()
+
+
 # --- Hover-Style Auto-Hide Transparency Slider ---
 class HoverSliderBox(QFrame):
     def __init__(self, parent_assistant=None):
@@ -675,6 +785,8 @@ class NativeAssistant(QMainWindow):
         self.is_click_through = False
         self.is_listening = False
         self.is_auto_running = False
+        self.is_auto_listening_paused = False
+        self.auto_confirm_dialog = None
         self.current_size_index = 0
         self.signals = WorkerSignals()
         self.current_ai_bubble = None
@@ -829,7 +941,7 @@ class NativeAssistant(QMainWindow):
             }
             QPushButton:hover { color: #f8fafc; }
         """)
-        self.auto_btn.clicked.connect(lambda: self.set_mode("auto"))
+        self.auto_btn.clicked.connect(self.on_auto_btn_clicked)
         mode_layout.addWidget(self.auto_btn)
         header_layout.addWidget(self.mode_container)
 
@@ -1081,7 +1193,7 @@ class NativeAssistant(QMainWindow):
                 background-color: #1d4ed8;
             }
         """)
-        self.voice_btn.clicked.connect(self.start_voice_input)
+        self.voice_btn.clicked.connect(self.on_voice_button_clicked)
         dock_center_layout.addWidget(self.voice_btn)
 
         self.chat_btn = QPushButton("💬")
@@ -1241,6 +1353,20 @@ class NativeAssistant(QMainWindow):
         self.apply_container_style()
         self.show_slider_with_timer()
 
+    def on_auto_btn_clicked(self):
+        if self.current_mode == "auto":
+            return
+        # Temporarily keep manual selected in UI until confirmed
+        self.manual_btn.setChecked(True)
+        self.auto_btn.setChecked(False)
+
+        if not self.auto_confirm_dialog:
+            self.auto_confirm_dialog = AutoModeConfirmDialog(self.main_container)
+            self.auto_confirm_dialog.confirmed.connect(lambda: self.set_mode("auto"))
+            self.auto_confirm_dialog.cancelled.connect(lambda: self.set_mode("manual"))
+
+        self.auto_confirm_dialog.show_centered(self.main_container)
+
     def set_mode(self, mode):
         self.current_mode = mode
         if mode == "manual":
@@ -1249,12 +1375,91 @@ class NativeAssistant(QMainWindow):
             self.auto_btn.setChecked(False)
             self.auto_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.is_auto_running = False
+            self.is_auto_listening_paused = False
+            self.update_voice_button_style()
         else:
             self.auto_btn.setChecked(True)
             self.auto_btn.setStyleSheet("background-color: #10b981; color: #ffffff; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.manual_btn.setChecked(False)
             self.manual_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
+            self.is_auto_listening_paused = False
             self.start_auto_mode()
+            self.update_voice_button_style()
+
+    def update_voice_button_style(self):
+        if self.current_mode == "auto":
+            if self.is_auto_listening_paused:
+                self.voice_btn.setText("⏸️")
+                self.voice_btn.setToolTip("Auto Mode Paused — Click to Resume Listening")
+                self.voice_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #d97706;
+                        color: white;
+                        border: 2px solid #f59e0b;
+                        border-radius: 21px;
+                        font-size: 15px;
+                    }
+                    QPushButton:hover {
+                        background-color: #b45309;
+                    }
+                """)
+            else:
+                self.voice_btn.setText("🎙️")
+                self.voice_btn.setToolTip("Auto Mode Active — Listening to audio (Click to Pause)")
+                self.voice_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #10b981;
+                        color: white;
+                        border: none;
+                        border-radius: 21px;
+                        font-size: 16px;
+                    }
+                    QPushButton:hover {
+                        background-color: #059669;
+                    }
+                """)
+        else:
+            if self.is_listening:
+                self.voice_btn.setText("🎙️")
+                self.voice_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #ef4444;
+                        color: white;
+                        border: 2px solid #fca5a5;
+                        border-radius: 21px;
+                        font-size: 16px;
+                    }
+                """)
+            else:
+                self.voice_btn.setText("🎙️")
+                self.voice_btn.setToolTip("Voice Dictation (Press Space when focused, or Ctrl+Shift+V)")
+                self.voice_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #2563eb;
+                        color: white;
+                        border: none;
+                        border-radius: 21px;
+                        font-size: 16px;
+                    }
+                    QPushButton:hover {
+                        background-color: #1d4ed8;
+                    }
+                """)
+
+    def on_voice_button_clicked(self):
+        if self.current_mode == "auto":
+            self.is_auto_listening_paused = not self.is_auto_listening_paused
+            self.update_voice_button_style()
+            if self.is_auto_listening_paused:
+                self.status_pill.setText("⏸️ Auto listening paused")
+                self.status_pill.show()
+                QTimer.singleShot(2500, self.status_pill.hide)
+            else:
+                self.status_pill.setText("🎙️ Auto listening resumed")
+                self.status_pill.show()
+                QTimer.singleShot(2500, self.status_pill.hide)
+        else:
+            self.start_voice_input()
 
     def start_auto_mode(self):
         self.is_auto_running = True
@@ -1268,12 +1473,19 @@ class NativeAssistant(QMainWindow):
         r.dynamic_energy_threshold = True
 
         while self.is_auto_running and self.current_mode == "auto":
+            if self.is_auto_listening_paused:
+                time.sleep(0.3)
+                continue
             try:
                 with sr.Microphone() as src:
                     r.adjust_for_ambient_noise(src, duration=0.2)
+                    if self.is_auto_listening_paused or not self.is_auto_running:
+                        continue
                     audio = r.listen(src, timeout=4, phrase_time_limit=15)
+                if self.is_auto_listening_paused or not self.is_auto_running:
+                    continue
                 text = r.recognize_google(audio)
-                if text and self.is_auto_running:
+                if text and self.is_auto_running and not self.is_auto_listening_paused:
                     self.signals.voice_transcribed.emit(text)
             except Exception:
                 time.sleep(0.5)
@@ -1711,18 +1923,7 @@ class NativeAssistant(QMainWindow):
             QTimer.singleShot(2500, self.status_pill.hide)
 
     def on_voice_finished(self):
-        self.voice_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                color: white;
-                border: none;
-                border-radius: 21px;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-        """)
+        self.update_voice_button_style()
         if not self.is_listening and "Listening" in self.status_pill.text():
             self.status_pill.hide()
 
@@ -1732,7 +1933,7 @@ class NativeAssistant(QMainWindow):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and not self.text_input.hasFocus():
-            self.start_voice_input()
+            self.on_voice_button_clicked()
         else:
             super().keyPressEvent(event)
 
