@@ -5,8 +5,6 @@ import json
 import threading
 import time
 import re
-import struct
-import math
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QScrollArea, QFrame, QTextBrowser,
@@ -786,6 +784,8 @@ class NativeAssistant(QMainWindow):
         self.is_transparent_mode = False
         self.is_click_through = False
         self.is_listening = False
+        self.manual_voice_stop_requested = False
+        self.active_voice_src = None
         self.is_auto_running = False
         self.is_auto_listening_paused = False
         self.auto_confirm_dialog = None
@@ -1129,7 +1129,6 @@ class NativeAssistant(QMainWindow):
         self.send_btn.clicked.connect(self.send_text_prompt)
         input_inner_layout.addWidget(self.send_btn)
 
-        self.input_card.hide()
         container_layout.addWidget(self.input_card)
 
         # ==========================================
@@ -1189,7 +1188,7 @@ class NativeAssistant(QMainWindow):
         dock_center_layout.addWidget(self.cam_btn)
 
         self.voice_btn = QPushButton("🎙️")
-        self.voice_btn.setToolTip("Voice Dictation (Click or Press Space to Record)")
+        self.voice_btn.setToolTip("Voice Dictation (Press Space when focused, or Ctrl+Shift+V)")
         self.voice_btn.setFixedSize(42, 42)
         self.voice_btn.setStyleSheet("""
             QPushButton {
@@ -1207,7 +1206,7 @@ class NativeAssistant(QMainWindow):
         dock_center_layout.addWidget(self.voice_btn)
 
         self.chat_btn = QPushButton("💬")
-        self.chat_btn.setToolTip("Toggle Chat Box (💬)")
+        self.chat_btn.setToolTip("Focus Message Input")
         self.chat_btn.setFixedSize(36, 36)
         self.chat_btn.setStyleSheet("""
             QPushButton {
@@ -1221,7 +1220,7 @@ class NativeAssistant(QMainWindow):
                 border-color: #475569;
             }
         """)
-        self.chat_btn.clicked.connect(self.toggle_chat_input)
+        self.chat_btn.clicked.connect(lambda: self.text_input.setFocus())
         dock_center_layout.addWidget(self.chat_btn)
 
         # 3. Right Container (Type-through Switch + Transparent Switch)
@@ -1430,15 +1429,15 @@ class NativeAssistant(QMainWindow):
                 """)
         else:
             if self.is_listening:
-                self.voice_btn.setText("🎙️")
-                self.voice_btn.setToolTip("Recording... Click to Stop & Send (or Space)")
+                self.voice_btn.setText("🛑")
+                self.voice_btn.setToolTip("Listening... Click to Stop Recording")
                 self.voice_btn.setStyleSheet("""
                     QPushButton {
                         background-color: #ef4444;
                         color: white;
                         border: 2px solid #fca5a5;
                         border-radius: 21px;
-                        font-size: 16px;
+                        font-size: 15px;
                     }
                     QPushButton:hover {
                         background-color: #dc2626;
@@ -1446,7 +1445,7 @@ class NativeAssistant(QMainWindow):
                 """)
             else:
                 self.voice_btn.setText("🎙️")
-                self.voice_btn.setToolTip("Voice Dictation (Click or Press Space to Record)")
+                self.voice_btn.setToolTip("Voice Dictation (Click to Start / Stop, or Space)")
                 self.voice_btn.setStyleSheet("""
                     QPushButton {
                         background-color: #2563eb;
@@ -1474,55 +1473,9 @@ class NativeAssistant(QMainWindow):
                 QTimer.singleShot(2500, self.status_pill.hide)
         else:
             if self.is_listening:
-                # Toggle OFF: stop recording and transcribe immediately
-                self.is_listening = False
-                self.status_pill.setText("✨ Finishing voice...")
-                self.status_pill.show()
+                self.stop_voice_input()
             else:
-                # Toggle ON: start recording
                 self.start_voice_input()
-
-    def toggle_chat_input(self):
-        should_show = not self.input_card.isVisible()
-        self.input_card.setVisible(should_show)
-        if should_show:
-            self.chat_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #2563eb;
-                    color: #ffffff;
-                    border: 1px solid #3b82f6;
-                    border-radius: 18px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: #1d4ed8;
-                }
-            """)
-            self.text_input.setFocus()
-            self.text_input.selectAll()
-        else:
-            self.chat_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #1e293b;
-                    color: #94a3b8;
-                    border: 1px solid #334155;
-                    border-radius: 18px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: #334155;
-                    border-color: #475569;
-                    color: #f8fafc;
-                }
-            """)
-            self.text_input.clearFocus()
-            self.setFocus()
-
-        self.main_container.layout().activate()
-        self.main_container.update()
-        self.update()
-        QTimer.singleShot(20, self.reflow_bubbles)
-        QTimer.singleShot(20, self.update_scroll_bottom_btn)
 
     def _get_microphone(self):
         dev_idx = self.config.get("AUDIO_DEVICE_INDEX", None)
@@ -1873,15 +1826,16 @@ class NativeAssistant(QMainWindow):
         self.status_pill.show()
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
-    def _submit_prompt(self, text):
-        if self.is_generating or not text or not text.strip():
+    def send_text_prompt(self):
+        if self.is_generating:
             return
-        clean_text = text.strip()
-        if self.input_card.isVisible():
-            self.text_input.clear()
-        self.add_message(clean_text, is_user=True)
+        text = self.text_input.text().strip()
+        if not text:
+            return
+        self.text_input.clear()
+        self.add_message(text, is_user=True)
         self.scroll_to_bottom()
-        self.conversation_history.append({"role": "user", "text": clean_text, "image_bytes": None})
+        self.conversation_history.append({"role": "user", "text": text, "image_bytes": None})
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
@@ -1892,12 +1846,7 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
-        threading.Thread(target=self._stream_response, args=(clean_text,), daemon=True).start()
-
-    def send_text_prompt(self):
-        text = self.text_input.text().strip()
-        if text:
-            self._submit_prompt(text)
+        threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
 
     def _stream_response(self, prompt, image_bytes=None):
         candidate_models = [
@@ -2070,6 +2019,22 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
+    def stop_voice_input(self):
+        if not self.is_listening:
+            return
+        self.manual_voice_stop_requested = True
+        self.is_listening = False
+        if hasattr(self, 'active_voice_src') and self.active_voice_src:
+            try:
+                if hasattr(self.active_voice_src, 'stream') and self.active_voice_src.stream:
+                    self.active_voice_src.stream.close()
+            except Exception:
+                pass
+        self.update_voice_button_style()
+        self.status_pill.setText("⏹️ Stopped listening")
+        self.status_pill.show()
+        QTimer.singleShot(1500, self.status_pill.hide)
+
     def start_voice_input(self):
         if self.is_generating:
             return
@@ -2079,89 +2044,59 @@ class NativeAssistant(QMainWindow):
             QTimer.singleShot(3000, self.status_pill.hide)
             return
         if self.is_listening:
+            self.stop_voice_input()
             return
+
         self.is_listening = True
+        self.manual_voice_stop_requested = False
         self.update_voice_button_style()
-        self.status_pill.setText("🎙️ Listening... Click mic or press Space to stop")
+        self.status_pill.setText("🎙️ Listening... Click mic to stop")
         self.status_pill.show()
 
         def listen_worker():
             try:
                 r = sr.Recognizer()
+                r.pause_threshold = 1.3
+                r.non_speaking_duration = 0.7
+                r.dynamic_energy_threshold = True
+                r.dynamic_energy_ratio = 1.5
                 with self._get_microphone() as src:
-                    r.adjust_for_ambient_noise(src, duration=0.3)
-                    energy_threshold = max(160, min(r.energy_threshold, 350))
-                    sample_rate = src.SAMPLE_RATE
-                    sample_width = src.SAMPLE_WIDTH
-                    stream = src.stream
+                    self.active_voice_src = src
+                    if self.manual_voice_stop_requested or not self.is_listening:
+                        return
+                    r.adjust_for_ambient_noise(src, duration=0.4)
+                    r.energy_threshold = max(160, min(r.energy_threshold, 350))
+                    if self.manual_voice_stop_requested or not self.is_listening:
+                        return
+                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak now (Click mic to stop)", "active")
+                    audio = r.listen(src, timeout=10, phrase_time_limit=35)
+                
+                if self.manual_voice_stop_requested or not self.is_listening:
+                    return
 
-                    frames = io.BytesIO()
-                    has_speech_started = False
-                    silence_start_time = None
-                    start_time = time.time()
-                    
-                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak your question (Click mic to stop)", "active")
-
-                    while self.is_listening:
-                        if time.time() - start_time > 45:
-                            break
-                        
-                        try:
-                            data = stream.read(src.CHUNK)
-                        except Exception:
-                            break
-                        
-                        if not data:
-                            break
-                        frames.write(data)
-
-                        # RMS energy calculation for voice activity
-                        try:
-                            import audioop
-                            energy = audioop.rms(data, sample_width)
-                        except Exception:
-                            count = len(data) // 2
-                            if count > 0:
-                                shorts = struct.unpack(f"<{count}h", data)
-                                energy = int(math.sqrt(sum(s*s for s in shorts) / count))
-                            else:
-                                energy = 0
-
-                        if energy > energy_threshold:
-                            has_speech_started = True
-                            silence_start_time = None
-                        else:
-                            if has_speech_started:
-                                if silence_start_time is None:
-                                    silence_start_time = time.time()
-                                elif time.time() - silence_start_time > 1.8:
-                                    # 1.8s of silence after speech -> finish recording naturally
-                                    break
-
-                raw_bytes = frames.getvalue()
-                if raw_bytes and len(raw_bytes) > (sample_rate * sample_width * 0.3):
-                    self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
-                    audio = sr.AudioData(raw_bytes, sample_rate, sample_width)
-                    text = ""
+                self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
+                text = ""
+                try:
+                    text = r.recognize_google(audio, language="en-US")
+                except Exception:
                     try:
-                        text = r.recognize_google(audio, language="en-US")
+                        text = r.recognize_google(audio, language="en-IN")
                     except Exception:
-                        try:
-                            text = r.recognize_google(audio, language="en-IN")
-                        except Exception:
-                            text = ""
-                    
-                    clean_text = text.strip() if text else ""
-                    if clean_text:
-                        self.signals.voice_transcribed.emit(clean_text)
-                    else:
-                        self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
-                else:
-                    self.signals.voice_status_signal.emit("⚠️ Recording too short", "error")
+                        text = ""
+                
+                if text and text.strip() and not self.manual_voice_stop_requested:
+                    self.signals.voice_transcribed.emit(text.strip())
+                elif not self.manual_voice_stop_requested:
+                    self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
+            except sr.WaitTimeoutError:
+                if not self.manual_voice_stop_requested:
+                    self.signals.voice_status_signal.emit("⚠️ Mic timed out", "error")
             except Exception as e:
-                print(f"Voice worker error: {e}")
-                self.signals.voice_status_signal.emit("⚠️ Mic error or quiet", "error")
+                if not self.manual_voice_stop_requested:
+                    print(f"Voice error: {e}")
+                    self.signals.voice_status_signal.emit("⚠️ Mic timed out or quiet", "error")
             finally:
+                self.active_voice_src = None
                 self.is_listening = False
                 self.signals.voice_finished_signal.emit()
 
@@ -2179,9 +2114,10 @@ class NativeAssistant(QMainWindow):
             self.status_pill.hide()
 
     def on_voice_transcribed(self, text):
-        if self.is_generating or not text:
+        if self.is_generating:
             return
-        self._submit_prompt(text)
+        self.text_input.setText(text)
+        self.send_text_prompt()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and not self.text_input.hasFocus():
