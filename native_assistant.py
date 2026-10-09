@@ -787,6 +787,8 @@ class NativeAssistant(QMainWindow):
         self.is_auto_running = False
         self.is_auto_listening_paused = False
         self.auto_confirm_dialog = None
+        self.is_generating = False
+        self.stream_chunk_buffer = ""
         self.current_size_index = 0
         self.signals = WorkerSignals()
         self.current_ai_bubble = None
@@ -796,6 +798,11 @@ class NativeAssistant(QMainWindow):
         self.current_mode = "manual"
         self.opacity_val = self.config.get("TRANSPARENCY", 65)
         self.conversation_history = []
+
+        # Smooth 45ms batch timer for streaming chunks (prevents flicker / glitches)
+        self.stream_render_timer = QTimer(self)
+        self.stream_render_timer.setInterval(45)
+        self.stream_render_timer.timeout.connect(self._flush_stream_buffer)
 
         # 6-Second Auto-Hide Timer for the Slider
         self.slider_timer = QTimer(self)
@@ -1473,19 +1480,19 @@ class NativeAssistant(QMainWindow):
         r.dynamic_energy_threshold = True
 
         while self.is_auto_running and self.current_mode == "auto":
-            if self.is_auto_listening_paused:
+            if self.is_auto_listening_paused or self.is_generating:
                 time.sleep(0.3)
                 continue
             try:
                 with sr.Microphone() as src:
                     r.adjust_for_ambient_noise(src, duration=0.2)
-                    if self.is_auto_listening_paused or not self.is_auto_running:
+                    if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
                         continue
                     audio = r.listen(src, timeout=4, phrase_time_limit=15)
-                if self.is_auto_listening_paused or not self.is_auto_running:
+                if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
                     continue
                 text = r.recognize_google(audio)
-                if text and self.is_auto_running and not self.is_auto_listening_paused:
+                if text and self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
                     self.signals.voice_transcribed.emit(text)
             except Exception:
                 time.sleep(0.5)
@@ -1684,25 +1691,35 @@ class NativeAssistant(QMainWindow):
         self.scroll_to_bottom()
 
     def on_selection_action(self, action_type, full_prompt):
+        if self.is_generating:
+            return
         self.add_message(full_prompt, is_user=True)
+        self.scroll_to_bottom()
         self.conversation_history.append({"role": "user", "text": full_prompt, "image_bytes": None})
+        self.is_generating = True
+        self.stream_chunk_buffer = ""
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
     def send_text_prompt(self):
+        if self.is_generating:
+            return
         text = self.text_input.text().strip()
         if not text:
             return
         self.text_input.clear()
         self.add_message(text, is_user=True)
+        self.scroll_to_bottom()
         self.conversation_history.append({"role": "user", "text": text, "image_bytes": None})
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
             return
 
+        self.is_generating = True
+        self.stream_chunk_buffer = ""
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
@@ -1799,11 +1816,21 @@ class NativeAssistant(QMainWindow):
         self.signals.stream_finished.emit()
 
     def on_stream_chunk(self, chunk):
-        if self.current_ai_bubble:
-            self.current_ai_bubble.append_text(chunk)
+        self.stream_chunk_buffer += chunk
+        if not self.stream_render_timer.isActive():
+            self.stream_render_timer.start()
+
+    def _flush_stream_buffer(self):
+        if self.stream_chunk_buffer and self.current_ai_bubble:
+            buf = self.stream_chunk_buffer
+            self.stream_chunk_buffer = ""
+            self.current_ai_bubble.append_text(buf)
             self.update_scroll_bottom_btn()
 
     def on_stream_finished(self):
+        self.stream_render_timer.stop()
+        self._flush_stream_buffer()
+        self.is_generating = False
         self.status_pill.hide()
         if self.current_ai_bubble:
             self.current_ai_bubble.show_action_chips()
@@ -1813,6 +1840,7 @@ class NativeAssistant(QMainWindow):
                     "text": self.current_ai_bubble.raw_text,
                     "image_bytes": None
                 })
+        self.update_scroll_bottom_btn()
 
     def capture_screen_and_analyze(self):
         self.status_pill.setText("••• 📸 Capturing screen...")
@@ -1847,6 +1875,7 @@ class NativeAssistant(QMainWindow):
         image_bytes = bytes(buffer.data())
 
         self.add_message("📸 Screen Capture", is_user=True, is_image=True, pixmap=pixmap)
+        self.scroll_to_bottom()
         prompt = "Analyze this screen. Solve any question/problem visible or explain the active content immediately with clear steps."
         self.conversation_history.append({
             "role": "user",
@@ -1859,6 +1888,8 @@ class NativeAssistant(QMainWindow):
             self.status_pill.hide()
             return
 
+        self.is_generating = True
+        self.stream_chunk_buffer = ""
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
 
@@ -1866,6 +1897,8 @@ class NativeAssistant(QMainWindow):
         threading.Thread(target=self._stream_response, args=(prompt, image_bytes), daemon=True).start()
 
     def start_voice_input(self):
+        if self.is_generating:
+            return
         if not SPEECH_AVAILABLE:
             self.status_pill.setText("⚠️ SpeechRecognition or pyaudio not installed")
             self.status_pill.show()
@@ -1928,6 +1961,8 @@ class NativeAssistant(QMainWindow):
             self.status_pill.hide()
 
     def on_voice_transcribed(self, text):
+        if self.is_generating:
+            return
         self.text_input.setText(text)
         self.send_text_prompt()
 
