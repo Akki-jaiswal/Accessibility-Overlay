@@ -1483,25 +1483,13 @@ class NativeAssistant(QMainWindow):
                 self.start_voice_input()
 
     def toggle_chat_input(self):
-        if self.input_card.isVisible():
-            self.input_card.hide()
-            self.chat_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #1e293b;
-                    border: 1px solid #334155;
-                    border-radius: 18px;
-                    font-size: 14px;
-                }
-                QPushButton:hover {
-                    background-color: #334155;
-                    border-color: #475569;
-                }
-            """)
-        else:
-            self.input_card.show()
+        should_show = not self.input_card.isVisible()
+        self.input_card.setVisible(should_show)
+        if should_show:
             self.chat_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #2563eb;
+                    color: #ffffff;
                     border: 1px solid #3b82f6;
                     border-radius: 18px;
                     font-size: 14px;
@@ -1512,6 +1500,29 @@ class NativeAssistant(QMainWindow):
             """)
             self.text_input.setFocus()
             self.text_input.selectAll()
+        else:
+            self.chat_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1e293b;
+                    color: #94a3b8;
+                    border: 1px solid #334155;
+                    border-radius: 18px;
+                    font-size: 14px;
+                }
+                QPushButton:hover {
+                    background-color: #334155;
+                    border-color: #475569;
+                    color: #f8fafc;
+                }
+            """)
+            self.text_input.clearFocus()
+            self.setFocus()
+
+        self.main_container.layout().activate()
+        self.main_container.update()
+        self.update()
+        QTimer.singleShot(20, self.reflow_bubbles)
+        QTimer.singleShot(20, self.update_scroll_bottom_btn)
 
     def _get_microphone(self):
         dev_idx = self.config.get("AUDIO_DEVICE_INDEX", None)
@@ -1862,16 +1873,15 @@ class NativeAssistant(QMainWindow):
         self.status_pill.show()
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
-    def send_text_prompt(self):
-        if self.is_generating:
+    def _submit_prompt(self, text):
+        if self.is_generating or not text or not text.strip():
             return
-        text = self.text_input.text().strip()
-        if not text:
-            return
-        self.text_input.clear()
-        self.add_message(text, is_user=True)
+        clean_text = text.strip()
+        if self.input_card.isVisible():
+            self.text_input.clear()
+        self.add_message(clean_text, is_user=True)
         self.scroll_to_bottom()
-        self.conversation_history.append({"role": "user", "text": text, "image_bytes": None})
+        self.conversation_history.append({"role": "user", "text": clean_text, "image_bytes": None})
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
@@ -1882,7 +1892,12 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
-        threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
+        threading.Thread(target=self._stream_response, args=(clean_text,), daemon=True).start()
+
+    def send_text_prompt(self):
+        text = self.text_input.text().strip()
+        if text:
+            self._submit_prompt(text)
 
     def _stream_response(self, prompt, image_bytes=None):
         candidate_models = [
@@ -2164,10 +2179,9 @@ class NativeAssistant(QMainWindow):
             self.status_pill.hide()
 
     def on_voice_transcribed(self, text):
-        if self.is_generating:
+        if self.is_generating or not text:
             return
-        self.text_input.setText(text)
-        self.send_text_prompt()
+        self._submit_prompt(text)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and not self.text_input.hasFocus():
