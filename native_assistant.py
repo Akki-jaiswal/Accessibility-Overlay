@@ -1153,7 +1153,7 @@ class NativeAssistant(QMainWindow):
             QPushButton { background-color: #1e293b; border: 1px solid #334155; border-radius: 15px; font-size: 13px; }
             QPushButton:hover { background-color: #334155; }
         """)
-        self.key_btn.clicked.connect(self.prompt_api_key)
+        self.key_btn.clicked.connect(self.show_settings_menu)
         dock_left_layout.addWidget(self.key_btn)
 
         self.credits_badge = QLabel("🪙 Free")
@@ -1468,6 +1468,15 @@ class NativeAssistant(QMainWindow):
         else:
             self.start_voice_input()
 
+    def _get_microphone(self):
+        dev_idx = self.config.get("AUDIO_DEVICE_INDEX", None)
+        try:
+            if dev_idx is not None and dev_idx >= 0:
+                return sr.Microphone(device_index=dev_idx)
+        except Exception:
+            pass
+        return sr.Microphone()
+
     def start_auto_mode(self):
         self.is_auto_running = True
         threading.Thread(target=self._auto_listener_loop, daemon=True).start()
@@ -1475,27 +1484,55 @@ class NativeAssistant(QMainWindow):
     def _auto_listener_loop(self):
         if not SPEECH_AVAILABLE:
             return
+        
         r = sr.Recognizer()
-        r.pause_threshold = 1.0
+        r.pause_threshold = 1.4  # Wait 1.4s of complete silence before finalizing query (listens to full question)
+        r.non_speaking_duration = 0.8
+        r.phrase_threshold = 0.3
         r.dynamic_energy_threshold = True
+        r.dynamic_energy_ratio = 1.5
+        r.dynamic_energy_adjustment_damping = 0.15
+
+        # Initial noise calibration once at startup
+        try:
+            with self._get_microphone() as src:
+                r.adjust_for_ambient_noise(src, duration=0.6)
+                r.energy_threshold = max(160, min(r.energy_threshold, 350))
+        except Exception as e:
+            print(f"Auto listener calibration error: {e}")
 
         while self.is_auto_running and self.current_mode == "auto":
             if self.is_auto_listening_paused or self.is_generating:
                 time.sleep(0.3)
                 continue
             try:
-                with sr.Microphone() as src:
-                    r.adjust_for_ambient_noise(src, duration=0.2)
+                with self._get_microphone() as src:
                     if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
                         continue
-                    audio = r.listen(src, timeout=4, phrase_time_limit=15)
+                    audio = r.listen(src, timeout=5, phrase_time_limit=35)
+                
                 if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
                     continue
-                text = r.recognize_google(audio)
-                if text and self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
-                    self.signals.voice_transcribed.emit(text)
+
+                # Dual-pass recognition for maximum accuracy
+                text = ""
+                try:
+                    text = r.recognize_google(audio, language="en-US")
+                except Exception:
+                    try:
+                        text = r.recognize_google(audio, language="en-IN")
+                    except Exception:
+                        text = ""
+
+                clean_text = text.strip() if text else ""
+                # Ensure complete question/query (at least 2 words and >= 8 characters)
+                if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 8:
+                    if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
+                        self.signals.voice_transcribed.emit(clean_text)
+            except sr.WaitTimeoutError:
+                continue
             except Exception:
-                time.sleep(0.5)
+                time.sleep(0.4)
 
     def cycle_window_size(self):
         self.current_size_index = (self.current_size_index + 1) % len(self.SIZES)
@@ -1645,6 +1682,83 @@ class NativeAssistant(QMainWindow):
             self.config["GEMINI_API_KEY"] = key.strip()
             save_config(self.config)
             self.init_ai()
+
+    def prompt_audio_device(self):
+        if not SPEECH_AVAILABLE:
+            self.status_pill.setText("⚠️ Speech recognition not available")
+            self.status_pill.show()
+            QTimer.singleShot(3000, self.status_pill.hide)
+            return
+
+        device_names = sr.Microphone.list_microphone_names()
+        items = ["0: Default System Input (Microsoft Sound Mapper)"]
+        valid_indices = [0]
+        
+        seen = set()
+        for idx, name in enumerate(device_names):
+            if idx == 0:
+                continue
+            name_clean = name.strip()
+            if name_clean not in seen and ("Mic" in name_clean or "Stereo Mix" in name_clean or "Capture" in name_clean or "Input" in name_clean or "Audio" in name_clean):
+                seen.add(name_clean)
+                items.append(f"{idx}: {name_clean}")
+                valid_indices.append(idx)
+        
+        current_idx = self.config.get("AUDIO_DEVICE_INDEX", 0)
+        current_item_index = 0
+        for i, v_idx in enumerate(valid_indices):
+            if v_idx == current_idx:
+                current_item_index = i
+                break
+
+        item, ok = QInputDialog.getItem(
+            self, "Audio Input Device",
+            "Select Audio Device for Voice & Meeting Capture:\n(Tip: Choose 'Stereo Mix' to capture meeting/computer audio directly)",
+            items, current_item_index, False
+        )
+        if ok and item:
+            try:
+                dev_idx = int(item.split(":")[0])
+                self.config["AUDIO_DEVICE_INDEX"] = dev_idx
+                save_config(self.config)
+                clean_lbl = item.split(":")[1].strip()
+                self.status_pill.setText(f"🎙️ Audio set: {clean_lbl[:22]}")
+                self.status_pill.show()
+                QTimer.singleShot(3500, self.status_pill.hide)
+            except Exception as e:
+                print(f"Error selecting audio device: {e}")
+
+    def show_settings_menu(self):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #0b1329;
+                color: #f8fafc;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 14px;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QMenu::item:selected {
+                background-color: #1e293b;
+                color: #38bdf8;
+            }
+        """)
+        key_act = menu.addAction("🔑 Set Gemini API Key")
+        key_act.triggered.connect(self.prompt_api_key)
+
+        audio_act = menu.addAction("🎙️ Select Audio Device (Mic / Stereo Mix)")
+        audio_act.triggered.connect(self.prompt_audio_device)
+
+        persona_act = menu.addAction("🎛️ Customize Persona & Instructions")
+        persona_act.triggered.connect(self.prompt_persona)
+
+        btn_pos = self.key_btn.mapToGlobal(QPoint(0, -115))
+        menu.exec(btn_pos)
 
     def add_message(self, text="", is_user=False, is_image=False, pixmap=None):
         bubble = MessageBubble(text, is_user=is_user, is_image=is_image, pixmap=pixmap, parent_assistant=self)
@@ -1916,30 +2030,38 @@ class NativeAssistant(QMainWindow):
                 font-size: 16px;
             }
         """)
-        self.status_pill.setText("🎙️ Listening... Speak now")
+        self.status_pill.setText("🎙️ Listening... Speak your question")
         self.status_pill.show()
 
         def listen_worker():
             try:
                 r = sr.Recognizer()
-                r.pause_threshold = 0.8
+                r.pause_threshold = 1.3
+                r.non_speaking_duration = 0.7
                 r.dynamic_energy_threshold = True
-                with sr.Microphone() as src:
-                    r.adjust_for_ambient_noise(src, duration=0.25)
-                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak now", "active")
-                    audio = r.listen(src, timeout=6, phrase_time_limit=15)
+                r.dynamic_energy_ratio = 1.5
+                with self._get_microphone() as src:
+                    r.adjust_for_ambient_noise(src, duration=0.4)
+                    r.energy_threshold = max(160, min(r.energy_threshold, 350))
+                    self.signals.voice_status_signal.emit("🎙️ Listening... Speak your question", "active")
+                    audio = r.listen(src, timeout=8, phrase_time_limit=35)
                 
-                self.signals.voice_status_signal.emit("✨ Transcribing voice...", "transcribing")
+                self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
                 text = ""
                 try:
-                    text = r.recognize_google(audio, language="en-IN")
-                except Exception:
                     text = r.recognize_google(audio, language="en-US")
+                except Exception:
+                    try:
+                        text = r.recognize_google(audio, language="en-IN")
+                    except Exception:
+                        text = ""
                 
                 if text and text.strip():
                     self.signals.voice_transcribed.emit(text.strip())
                 else:
                     self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
+            except sr.WaitTimeoutError:
+                self.signals.voice_status_signal.emit("⚠️ Mic timed out", "error")
             except Exception as e:
                 print(f"Voice error: {e}")
                 self.signals.voice_status_signal.emit("⚠️ Mic timed out or quiet", "error")
