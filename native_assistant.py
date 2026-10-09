@@ -1430,7 +1430,7 @@ class NativeAssistant(QMainWindow):
     def add_message(self, text="", is_user=False, is_image=False, pixmap=None):
         bubble = MessageBubble(text, is_user=is_user, is_image=is_image, pixmap=pixmap, parent_assistant=self)
         self.chat_layout.insertWidget(self.chat_layout.count() - 1, bubble)
-        QTimer.singleShot(40, self.scroll_to_bottom)
+        QTimer.singleShot(40, self.update_scroll_bottom_btn)
         return bubble
 
     def update_scroll_bottom_btn(self):
@@ -1441,7 +1441,7 @@ class NativeAssistant(QMainWindow):
         val = sb.value()
         if max_val - val > 30:
             self.scroll_bottom_btn.show()
-            self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 110)
+            self.scroll_bottom_btn.move(self.main_container.width() - 44, self.height() - 150)
             self.scroll_bottom_btn.raise_()
         else:
             self.scroll_bottom_btn.hide()
