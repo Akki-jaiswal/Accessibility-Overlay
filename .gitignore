@@ -9,3 +9,6 @@ venv/
 
 web_data/
 *.log
+config.json
+*.mp4
+.vscode/

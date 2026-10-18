@@ -35,6 +35,17 @@ except ImportError:
     SPEECH_AVAILABLE = False
 
 try:
+    import pyaudiowpatch as pyaudio
+    PYAUDIO_AVAILABLE = True
+except ImportError:
+    try:
+        import pyaudio
+        PYAUDIO_AVAILABLE = True
+    except ImportError:
+        pyaudio = None
+        PYAUDIO_AVAILABLE = False
+
+try:
     from google import genai
     from google.genai import types
     GENAI_AVAILABLE = True
@@ -49,7 +60,8 @@ def load_config():
     defaults = {
         "GEMINI_API_KEY": "",
         "PERSONA": "I am Akshay, a 3rd year BTech Computer Science student focusing on backend architecture, data analysis, and building AI tools. When answering, be direct, concise, and structured.",
-        "TRANSPARENCY": 65
+        "TRANSPARENCY": 65,
+        "AUDIO_SOURCE": "loopback"
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -520,13 +532,12 @@ class MessageBubble(QWidget):
     def on_chip_clicked(self, chip_type):
         if not self.parent_assistant:
             return
-        excerpt = self.raw_text.strip()[:400]
-        if chip_type == "Explain More":
-            prompt = f"Explain this concept in more depth and detail, breaking down the underlying technical mechanics:\n\n\"{excerpt}\""
-        elif chip_type == "Give Example":
-            prompt = f"Give a concrete walkthrough example and scenario for this in context:\n\n\"{excerpt}\""
+        if chip_type == "Give Example":
+            prompt = "Give me a concrete walkthrough example of this."
+        elif chip_type == "Explain More":
+            prompt = "Can you explain this in more depth and detail?"
         else:
-            prompt = f"Simplify this into 1-2 clear, punchy spoken sentences I can say aloud in an interview:\n\n\"{excerpt}\""
+            prompt = "Simplify this into 1-2 clear, punchy spoken sentences."
         self.parent_assistant.on_selection_action(chip_type, prompt)
 
     def apply_transparency(self, is_transparent):
@@ -839,6 +850,22 @@ class NativeAssistant(QMainWindow):
 
     def showEvent(self, event):
         super().showEvent(event)
+        self._enforce_taskbar_hidden()
+
+    def _enforce_taskbar_hidden(self):
+        try:
+            import ctypes
+            from ctypes import wintypes
+            hwnd = wintypes.HWND(int(self.winId()))
+            user32 = ctypes.windll.user32
+            GWL_EXSTYLE = -20
+            WS_EX_TOOLWINDOW = 0x00000080
+            WS_EX_APPWINDOW = 0x00040000
+            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+            style = (style | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+        except Exception:
+            pass
 
     def init_ai(self):
         api_key = self.config.get("GEMINI_API_KEY", "")
@@ -853,7 +880,7 @@ class NativeAssistant(QMainWindow):
             self.ai_ready = False
 
     def init_ui(self):
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setMouseTracking(True)
         
@@ -1477,8 +1504,46 @@ class NativeAssistant(QMainWindow):
             else:
                 self.start_voice_input()
 
+    def _get_working_mic_index(self):
+        if not hasattr(self, '_cached_mic_index') or self._cached_mic_index is None:
+            names = sr.Microphone.list_microphone_names() if SPEECH_AVAILABLE else []
+            best_idx = 5 if len(names) > 5 else 0
+            for idx in [5, 4, 1, 0]:
+                if idx < len(names):
+                    try:
+                        with sr.Microphone(device_index=idx) as src:
+                            tot = 0
+                            for _ in range(2):
+                                b = src.stream.read(src.CHUNK)
+                                tot += sr.audioop.rms(b, src.SAMPLE_WIDTH)
+                            if tot > 0:
+                                best_idx = idx
+                                break
+                    except Exception:
+                        pass
+            self._cached_mic_index = best_idx
+        return self._cached_mic_index
+
+    def _get_loopback_device(self):
+        if not PYAUDIO_AVAILABLE or pyaudio is None:
+            return None
+        p = pyaudio.PyAudio()
+        try:
+            wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+            default_speakers = p.get_device_info_by_index(wasapi_info['defaultOutputDevice'])
+            if not default_speakers.get('isLoopbackDevice', False):
+                for loopback in p.get_loopback_device_info_generator():
+                    if default_speakers['name'] in loopback['name']:
+                        return loopback
+            return default_speakers
+        except Exception as e:
+            print(f"Loopback detection error: {e}")
+            return None
+        finally:
+            p.terminate()
+
     def _get_microphone(self):
-        dev_idx = self.config.get("AUDIO_DEVICE_INDEX", None)
+        dev_idx = self._get_working_mic_index()
         try:
             if dev_idx is not None and dev_idx >= 0:
                 return sr.Microphone(device_index=dev_idx)
@@ -1495,53 +1560,121 @@ class NativeAssistant(QMainWindow):
             return
         
         r = sr.Recognizer()
-        r.pause_threshold = 1.4  # Wait 1.4s of complete silence before finalizing query (listens to full question)
-        r.non_speaking_duration = 0.8
-        r.phrase_threshold = 0.3
-        r.dynamic_energy_threshold = True
-        r.dynamic_energy_ratio = 1.5
-        r.dynamic_energy_adjustment_damping = 0.15
-
-        # Initial noise calibration once at startup
-        try:
-            with self._get_microphone() as src:
-                r.adjust_for_ambient_noise(src, duration=0.6)
-                r.energy_threshold = max(160, min(r.energy_threshold, 350))
-        except Exception as e:
-            print(f"Auto listener calibration error: {e}")
-
+        
         while self.is_auto_running and self.current_mode == "auto":
             if self.is_auto_listening_paused or self.is_generating:
                 time.sleep(0.3)
                 continue
-            try:
-                with self._get_microphone() as src:
+
+            audio_src = self.config.get("AUDIO_SOURCE", "loopback")
+            loop_dev = self._get_loopback_device() if audio_src in ["loopback", "dual"] else None
+
+            # 1. Listen directly to Computer / Meeting / YouTube audio via WASAPI Loopback
+            if loop_dev is not None and PYAUDIO_AVAILABLE:
+                try:
+                    p = pyaudio.PyAudio()
+                    sample_rate = int(loop_dev['defaultSampleRate'])
+                    channels = loop_dev['maxInputChannels']
+                    stream = p.open(
+                        format=pyaudio.paInt16,
+                        channels=channels,
+                        rate=sample_rate,
+                        input=True,
+                        input_device_index=loop_dev['index'],
+                        frames_per_buffer=1024
+                    )
+                    
+                    frames = []
+                    has_speech = False
+                    speech_start = None
+                    silence_start = None
+                    start_time = time.time()
+
+                    while self.is_auto_running and self.current_mode == "auto" and not self.is_auto_listening_paused and not self.is_generating:
+                        try:
+                            buf = stream.read(1024)
+                        except Exception:
+                            break
+
+                        mono = sr.audioop.tomono(buf, 2, 0.5, 0.5) if channels == 2 else buf
+                        chunk_energy = sr.audioop.rms(mono, 2)
+                        now = time.time()
+
+                        if chunk_energy > 280:
+                            if not has_speech:
+                                has_speech = True
+                                speech_start = now
+                            silence_start = None
+                            frames.append(mono)
+                        else:
+                            if has_speech:
+                                frames.append(mono)
+                                if silence_start is None:
+                                    silence_start = now
+                                elif now - silence_start >= 1.3:
+                                    break
+                            else:
+                                if now - start_time > 6.0:
+                                    break
+                                time.sleep(0.01)
+
+                        if has_speech and (now - speech_start > 35.0):
+                            break
+
+                    stream.stop_stream()
+                    stream.close()
+                    p.terminate()
+
+                    if frames and len(frames) > 15 and not self.is_generating:
+                        audio_data = sr.AudioData(b"".join(frames), sample_rate, 2)
+                        text = ""
+                        try:
+                            text = r.recognize_google(audio_data, language="en-US")
+                        except Exception:
+                            try:
+                                text = r.recognize_google(audio_data, language="en-IN")
+                            except Exception:
+                                text = ""
+
+                        clean_text = text.strip() if text else ""
+                        if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 7:
+                            if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
+                                self.signals.voice_transcribed.emit(clean_text)
+
+                except Exception as e:
+                    print(f"Auto loopback listener error: {e}")
+                    time.sleep(0.4)
+
+            # 2. Microphone Listener Fallback (or when audio_src == 'mic')
+            else:
+                try:
+                    with self._get_microphone() as src:
+                        if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
+                            continue
+                        r.pause_threshold = 1.3
+                        r.adjust_for_ambient_noise(src, duration=0.3)
+                        audio = r.listen(src, timeout=5, phrase_time_limit=35)
+                    
                     if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
                         continue
-                    audio = r.listen(src, timeout=5, phrase_time_limit=35)
-                
-                if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
-                    continue
 
-                # Dual-pass recognition for maximum accuracy
-                text = ""
-                try:
-                    text = r.recognize_google(audio, language="en-US")
-                except Exception:
+                    text = ""
                     try:
-                        text = r.recognize_google(audio, language="en-IN")
+                        text = r.recognize_google(audio, language="en-US")
                     except Exception:
-                        text = ""
+                        try:
+                            text = r.recognize_google(audio, language="en-IN")
+                        except Exception:
+                            text = ""
 
-                clean_text = text.strip() if text else ""
-                # Ensure complete question/query (at least 2 words and >= 8 characters)
-                if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 8:
-                    if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
-                        self.signals.voice_transcribed.emit(clean_text)
-            except sr.WaitTimeoutError:
-                continue
-            except Exception:
-                time.sleep(0.4)
+                    clean_text = text.strip() if text else ""
+                    if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 7:
+                        if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
+                            self.signals.voice_transcribed.emit(clean_text)
+                except sr.WaitTimeoutError:
+                    continue
+                except Exception:
+                    time.sleep(0.4)
 
     def cycle_window_size(self):
         self.current_size_index = (self.current_size_index + 1) % len(self.SIZES)
@@ -1699,43 +1832,37 @@ class NativeAssistant(QMainWindow):
             QTimer.singleShot(3000, self.status_pill.hide)
             return
 
-        device_names = sr.Microphone.list_microphone_names()
-        items = ["0: Default System Input (Microsoft Sound Mapper)"]
-        valid_indices = [0]
+        options = [
+            "🔊 Computer / Meeting Audio (YouTube, Zoom, Teams, Meet)",
+            "🎙️ Microphone (Your Voice / Speech)",
+            "🎙️+🔊 Dual Capture (Microphone + Computer Audio)"
+        ]
         
-        seen = set()
-        for idx, name in enumerate(device_names):
-            if idx == 0:
-                continue
-            name_clean = name.strip()
-            if name_clean not in seen and ("Mic" in name_clean or "Stereo Mix" in name_clean or "Capture" in name_clean or "Input" in name_clean or "Audio" in name_clean):
-                seen.add(name_clean)
-                items.append(f"{idx}: {name_clean}")
-                valid_indices.append(idx)
-        
-        current_idx = self.config.get("AUDIO_DEVICE_INDEX", 0)
-        current_item_index = 0
-        for i, v_idx in enumerate(valid_indices):
-            if v_idx == current_idx:
-                current_item_index = i
-                break
+        current_src = self.config.get("AUDIO_SOURCE", "loopback")
+        curr_idx = 0 if current_src == "loopback" else (1 if current_src == "mic" else 2)
 
         item, ok = QInputDialog.getItem(
-            self, "Audio Input Device",
-            "Select Audio Device for Voice & Meeting Capture:\n(Tip: Choose 'Stereo Mix' to capture meeting/computer audio directly)",
-            items, current_item_index, False
+            self, "Select Audio Source",
+            "Choose where Aura should listen:",
+            options, curr_idx, False
         )
         if ok and item:
-            try:
-                dev_idx = int(item.split(":")[0])
-                self.config["AUDIO_DEVICE_INDEX"] = dev_idx
-                save_config(self.config)
-                clean_lbl = item.split(":")[1].strip()
-                self.status_pill.setText(f"🎙️ Audio set: {clean_lbl[:22]}")
-                self.status_pill.show()
-                QTimer.singleShot(3500, self.status_pill.hide)
-            except Exception as e:
-                print(f"Error selecting audio device: {e}")
+            if "Computer" in item:
+                self.config["AUDIO_SOURCE"] = "loopback"
+                label = "Computer Audio"
+            elif "Microphone" in item and "Dual" not in item:
+                self.config["AUDIO_SOURCE"] = "mic"
+                label = "Microphone"
+            else:
+                self.config["AUDIO_SOURCE"] = "dual"
+                label = "Dual Audio"
+
+            # Remove old raw device index
+            self.config.pop("AUDIO_DEVICE_INDEX", None)
+            save_config(self.config)
+            self.status_pill.setText(f"🎧 Set: {label}")
+            self.status_pill.show()
+            QTimer.singleShot(3500, self.status_pill.hide)
 
     def show_settings_menu(self):
         menu = QMenu(self)
@@ -2171,54 +2298,13 @@ class NativeAssistant(QMainWindow):
 
     def show_and_activate(self):
         self.showNormal()
+        self._enforce_taskbar_hidden()
         self.activateWindow()
         self.raise_()
 
     def init_tray(self):
-        self.tray_icon = QSystemTrayIcon(self)
-        pixmap = QPixmap(32, 32)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setBrush(QColor("#38bdf8"))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(4, 4, 24, 24)
-        painter.setPen(QColor("#0f172a"))
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, "⚡")
-        painter.end()
-
-        self.tray_icon.setIcon(QIcon(pixmap))
-        self.tray_icon.setToolTip("Aura Assistant")
-
-        tray_menu = QMenu()
-        show_action = QAction("Show Assistant", self)
-        show_action.triggered.connect(self.show_and_activate)
-        tray_menu.addAction(show_action)
-
-        cam_action = QAction("📷 1-Click Screen Capture", self)
-        cam_action.triggered.connect(self.capture_screen_and_analyze)
-        tray_menu.addAction(cam_action)
-
-        trans_action = QAction("⚪ Toggle Transparent", self)
-        trans_action.triggered.connect(self.toggle_transparency)
-        tray_menu.addAction(trans_action)
-
-        type_through_action = QAction("🖱️ Toggle Type-Through", self)
-        type_through_action.triggered.connect(self.toggle_type_through_global)
-        tray_menu.addAction(type_through_action)
-
-        tray_menu.addSeparator()
-        key_action = QAction("⚙️ Set API Key", self)
-        key_action.triggered.connect(self.prompt_api_key)
-        tray_menu.addAction(key_action)
-
-        quit_action = QAction("Exit", self)
-        quit_action.triggered.connect(QApplication.instance().quit)
-        tray_menu.addAction(quit_action)
-
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(lambda r: self.toggle_visibility() if r == QSystemTrayIcon.ActivationReason.Trigger else None)
-        self.tray_icon.show()
+        # 100% Stealth Mode: Removed all taskbar and tray icons as requested so Aura leaves ZERO trace on the Windows taskbar
+        self.tray_icon = None
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
