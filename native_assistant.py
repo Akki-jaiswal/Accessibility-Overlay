@@ -1,6 +1,7 @@
 import sys
 import os
 import io
+import wave
 import json
 import threading
 import time
@@ -61,7 +62,7 @@ def load_config():
         "GEMINI_API_KEY": "",
         "PERSONA": "I am Akshay, a 3rd year BTech Computer Science student focusing on backend architecture, data analysis, and building AI tools. When answering, be direct, concise, and structured.",
         "TRANSPARENCY": 65,
-        "AUDIO_SOURCE": "loopback"
+        "AUDIO_SOURCE": "dual"
     }
     if os.path.exists(CONFIG_PATH):
         try:
@@ -84,7 +85,7 @@ def save_config(cfg):
 class WorkerSignals(QObject):
     stream_chunk = pyqtSignal(str)
     stream_finished = pyqtSignal()
-    voice_transcribed = pyqtSignal(str)
+    voice_transcribed = pyqtSignal(str, object)
     voice_status_signal = pyqtSignal(str, str)
     voice_finished_signal = pyqtSignal()
     show_window_signal = pyqtSignal()
@@ -1419,6 +1420,9 @@ class NativeAssistant(QMainWindow):
             self.manual_btn.setChecked(False)
             self.manual_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.is_auto_listening_paused = False
+            self.status_pill.setText("🎧 Auto Mode: Listening to meeting & mic audio...")
+            self.status_pill.show()
+            QTimer.singleShot(3500, self.status_pill.hide)
             self.start_auto_mode()
             self.update_voice_button_style()
 
@@ -1524,23 +1528,47 @@ class NativeAssistant(QMainWindow):
             self._cached_mic_index = best_idx
         return self._cached_mic_index
 
-    def _get_loopback_device(self):
+    def _get_wasapi_audio_devices(self):
         if not PYAUDIO_AVAILABLE or pyaudio is None:
-            return None
+            return None, None
         p = pyaudio.PyAudio()
+        mic_dev = None
+        loop_dev = None
         try:
             wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
-            default_speakers = p.get_device_info_by_index(wasapi_info['defaultOutputDevice'])
-            if not default_speakers.get('isLoopbackDevice', False):
-                for loopback in p.get_loopback_device_info_generator():
-                    if default_speakers['name'] in loopback['name']:
-                        return loopback
-            return default_speakers
+            wasapi_idx = wasapi_info['index']
+
+            # 1. Output Loopback device (Computer/Meeting/YouTube audio)
+            def_out = p.get_device_info_by_index(wasapi_info['defaultOutputDevice'])
+            for loopback in p.get_loopback_device_info_generator():
+                if def_out['name'] in loopback['name']:
+                    loop_dev = loopback
+                    break
+            if loop_dev is None and def_out.get('isLoopbackDevice', False):
+                loop_dev = def_out
+
+            # 2. Input Microphone device (Physical Voice Mic)
+            def_in_idx = wasapi_info.get('defaultInputDevice')
+            if def_in_idx is not None and def_in_idx >= 0:
+                d = p.get_device_info_by_index(def_in_idx)
+                if d.get('maxInputChannels', 0) > 0 and not d.get('isLoopbackDevice', False):
+                    mic_dev = d
+
+            if mic_dev is None:
+                for i in range(p.get_device_count()):
+                    d = p.get_device_info_by_index(i)
+                    if d.get('hostApi') == wasapi_idx and d.get('maxInputChannels', 0) > 0 and not d.get('isLoopbackDevice', False):
+                        mic_dev = d
+                        break
         except Exception as e:
-            print(f"Loopback detection error: {e}")
-            return None
+            print(f"WASAPI device detection error: {e}")
         finally:
             p.terminate()
+        return mic_dev, loop_dev
+
+    def _get_loopback_device(self):
+        _, loop_dev = self._get_wasapi_audio_devices()
+        return loop_dev
 
     def _get_microphone(self):
         dev_idx = self._get_working_mic_index()
@@ -1551,6 +1579,24 @@ class NativeAssistant(QMainWindow):
             pass
         return sr.Microphone()
 
+    @staticmethod
+    def _pcm_to_16k_wav(raw_data, sample_rate):
+        try:
+            if sample_rate != 16000:
+                data_16k, _ = sr.audioop.ratecv(raw_data, 2, 1, sample_rate, 16000, None)
+            else:
+                data_16k = raw_data
+            bio = io.BytesIO()
+            with wave.open(bio, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(data_16k)
+            return bio.getvalue(), data_16k
+        except Exception as e:
+            print(f"WAV conversion error: {e}")
+            return None, None
+
     def start_auto_mode(self):
         self.is_auto_running = True
         threading.Thread(target=self._auto_listener_loop, daemon=True).start()
@@ -1558,46 +1604,111 @@ class NativeAssistant(QMainWindow):
     def _auto_listener_loop(self):
         if not SPEECH_AVAILABLE:
             return
-        
+
         r = sr.Recognizer()
-        
+
         while self.is_auto_running and self.current_mode == "auto":
             if self.is_auto_listening_paused or self.is_generating:
                 time.sleep(0.3)
                 continue
 
-            audio_src = self.config.get("AUDIO_SOURCE", "loopback")
-            loop_dev = self._get_loopback_device() if audio_src in ["loopback", "dual"] else None
+            audio_src = self.config.get("AUDIO_SOURCE", "dual")
+            mic_dev, loop_dev = self._get_wasapi_audio_devices()
 
-            # 1. Listen directly to Computer / Meeting / YouTube audio via WASAPI Loopback
-            if loop_dev is not None and PYAUDIO_AVAILABLE:
+            # 1. High-Accuracy Dual Stream WASAPI Listener (Default)
+            if PYAUDIO_AVAILABLE and (loop_dev or mic_dev):
+                use_loop = (audio_src in ["dual", "loopback"]) and (loop_dev is not None)
+                use_mic = (audio_src in ["dual", "mic"]) and (mic_dev is not None)
+                if not use_loop and not use_mic:
+                    use_loop = loop_dev is not None
+                    use_mic = mic_dev is not None
+
                 try:
                     p = pyaudio.PyAudio()
-                    sample_rate = int(loop_dev['defaultSampleRate'])
-                    channels = loop_dev['maxInputChannels']
-                    stream = p.open(
-                        format=pyaudio.paInt16,
-                        channels=channels,
-                        rate=sample_rate,
-                        input=True,
-                        input_device_index=loop_dev['index'],
-                        frames_per_buffer=1024
-                    )
-                    
+                    stream_loop = None
+                    stream_mic = None
+                    sample_rate = 48000
+                    channels_loop = 2
+                    channels_mic = 2
+
+                    if use_loop and loop_dev:
+                        sample_rate = int(loop_dev['defaultSampleRate'])
+                        channels_loop = loop_dev['maxInputChannels']
+                        stream_loop = p.open(
+                            format=pyaudio.paInt16,
+                            channels=channels_loop,
+                            rate=sample_rate,
+                            input=True,
+                            input_device_index=loop_dev['index'],
+                            frames_per_buffer=1024
+                        )
+
+                    if use_mic and mic_dev:
+                        sample_rate = int(mic_dev['defaultSampleRate'])
+                        channels_mic = mic_dev['maxInputChannels']
+                        stream_mic = p.open(
+                            format=pyaudio.paInt16,
+                            channels=channels_mic,
+                            rate=sample_rate,
+                            input=True,
+                            input_device_index=mic_dev['index'],
+                            frames_per_buffer=1024
+                        )
+
                     frames = []
                     has_speech = False
                     speech_start = None
                     silence_start = None
-                    start_time = time.time()
+                    loop_start = time.time()
+                    last_interim_time = 0
+                    is_interim_working = False
 
                     while self.is_auto_running and self.current_mode == "auto" and not self.is_auto_listening_paused and not self.is_generating:
-                        try:
-                            buf = stream.read(1024)
-                        except Exception:
-                            break
+                        loop_mono = None
+                        mic_mono = None
 
-                        mono = sr.audioop.tomono(buf, 2, 0.5, 0.5) if channels == 2 else buf
-                        chunk_energy = sr.audioop.rms(mono, 2)
+                        if stream_loop:
+                            try:
+                                b_l = stream_loop.read(1024, exception_on_overflow=False)
+                                loop_mono = sr.audioop.tomono(b_l, 2, 0.5, 0.5) if channels_loop == 2 else b_l
+                            except Exception:
+                                pass
+
+                        if stream_mic:
+                            try:
+                                b_m = stream_mic.read(1024, exception_on_overflow=False)
+                                mic_mono = sr.audioop.tomono(b_m, 2, 0.5, 0.5) if channels_mic == 2 else b_m
+                            except Exception:
+                                pass
+
+                        rms_l = sr.audioop.rms(loop_mono, 2) if loop_mono else 0
+                        rms_m = sr.audioop.rms(mic_mono, 2) if mic_mono else 0
+
+                        # Dynamic normalization for crisp speech clarity
+                        if loop_mono and rms_l > 70:
+                            gain_l = max(1.0, min(3.0, 5000.0 / max(rms_l, 1)))
+                            if gain_l > 1.05:
+                                loop_mono = sr.audioop.mul(loop_mono, 2, gain_l)
+
+                        if mic_mono and rms_m > 70:
+                            gain_m = max(1.0, min(4.0, 5000.0 / max(rms_m, 1)))
+                            if gain_m > 1.05:
+                                mic_mono = sr.audioop.mul(mic_mono, 2, gain_m)
+
+                        if loop_mono and mic_mono:
+                            mixed = sr.audioop.add(loop_mono, mic_mono, 2)
+                        elif loop_mono:
+                            mixed = loop_mono
+                        elif mic_mono:
+                            mixed = mic_mono
+                        else:
+                            mixed = None
+
+                        if not mixed:
+                            time.sleep(0.01)
+                            continue
+
+                        chunk_energy = max(rms_l, rms_m, sr.audioop.rms(mixed, 2))
                         now = time.time()
 
                         if chunk_energy > 280:
@@ -1605,33 +1716,73 @@ class NativeAssistant(QMainWindow):
                                 has_speech = True
                                 speech_start = now
                             silence_start = None
-                            frames.append(mono)
+                            frames.append(mixed)
                         else:
                             if has_speech:
-                                frames.append(mono)
+                                frames.append(mixed)
                                 if silence_start is None:
                                     silence_start = now
                                 elif now - silence_start >= 1.3:
                                     break
                             else:
-                                if now - start_time > 6.0:
+                                if now - loop_start > 6.0:
                                     break
-                                time.sleep(0.01)
+                                time.sleep(0.005)
+
+                        # Live interim analysis before speaking stops
+                        if has_speech and (now - last_interim_time >= 0.85) and not is_interim_working and len(frames) >= 20:
+                            last_interim_time = now
+                            is_interim_working = True
+                            snap = list(frames)
+                            def _do_interim_auto(s_frames, s_rate):
+                                nonlocal is_interim_working
+                                try:
+                                    raw_snap = b"".join(s_frames)
+                                    down_16k, _ = sr.audioop.ratecv(raw_snap, 2, 1, s_rate, 16000, None)
+                                    r_sub = sr.Recognizer()
+                                    aud = sr.AudioData(down_16k, 16000, 2)
+                                    p_txt = ""
+                                    try:
+                                        p_txt = r_sub.recognize_google(aud, language="en-US")
+                                    except Exception:
+                                        try:
+                                            p_txt = r_sub.recognize_google(aud, language="en-IN")
+                                        except Exception:
+                                            p_txt = ""
+                                    if p_txt and p_txt.strip():
+                                        clean_p = p_txt.strip()
+                                        if len(clean_p) > 36:
+                                            clean_p = "..." + clean_p[-33:]
+                                        self.signals.voice_status_signal.emit(f"🎙️ \"{clean_p}\"", "interim")
+                                except Exception:
+                                    pass
+                                finally:
+                                    is_interim_working = False
+
+                            threading.Thread(target=_do_interim_auto, args=(snap, sample_rate), daemon=True).start()
 
                         if has_speech and (now - speech_start > 35.0):
                             break
 
-                    stream.stop_stream()
-                    stream.close()
+                    if stream_loop:
+                        try: stream_loop.stop_stream(); stream_loop.close()
+                        except Exception: pass
+                    if stream_mic:
+                        try: stream_mic.stop_stream(); stream_mic.close()
+                        except Exception: pass
                     p.terminate()
 
-                    if frames and len(frames) > 15 and not self.is_generating:
-                        audio_data = sr.AudioData(b"".join(frames), sample_rate, 2)
+                    if frames and len(frames) > 15 and not self.is_generating and self.is_auto_running and not self.is_auto_listening_paused:
+                        self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
+                        raw_data = b"".join(frames)
+                        wav_bytes, data_16k = self._pcm_to_16k_wav(raw_data, sample_rate)
                         text = ""
                         try:
+                            audio_data = sr.AudioData(data_16k, 16000, 2)
                             text = r.recognize_google(audio_data, language="en-US")
                         except Exception:
                             try:
+                                audio_data = sr.AudioData(data_16k, 16000, 2)
                                 text = r.recognize_google(audio_data, language="en-IN")
                             except Exception:
                                 text = ""
@@ -1639,13 +1790,16 @@ class NativeAssistant(QMainWindow):
                         clean_text = text.strip() if text else ""
                         if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 7:
                             if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
-                                self.signals.voice_transcribed.emit(clean_text)
+                                self.signals.voice_transcribed.emit(clean_text, wav_bytes)
+                        elif wav_bytes and len(frames) >= 40:
+                            if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
+                                self.signals.voice_transcribed.emit("🎙️ [Audio Query]", wav_bytes)
 
                 except Exception as e:
-                    print(f"Auto loopback listener error: {e}")
+                    print(f"Auto dual listener error: {e}")
                     time.sleep(0.4)
 
-            # 2. Microphone Listener Fallback (or when audio_src == 'mic')
+            # 2. SpeechRecognition Microphone Listener Fallback
             else:
                 try:
                     with self._get_microphone() as src:
@@ -1654,7 +1808,7 @@ class NativeAssistant(QMainWindow):
                         r.pause_threshold = 1.3
                         r.adjust_for_ambient_noise(src, duration=0.3)
                         audio = r.listen(src, timeout=5, phrase_time_limit=35)
-                    
+
                     if self.is_auto_listening_paused or not self.is_auto_running or self.is_generating:
                         continue
 
@@ -1670,7 +1824,7 @@ class NativeAssistant(QMainWindow):
                     clean_text = text.strip() if text else ""
                     if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 7:
                         if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
-                            self.signals.voice_transcribed.emit(clean_text)
+                            self.signals.voice_transcribed.emit(clean_text, None)
                 except sr.WaitTimeoutError:
                     continue
                 except Exception:
@@ -1833,13 +1987,13 @@ class NativeAssistant(QMainWindow):
             return
 
         options = [
+            "🎙️+🔊 Dual Capture (Microphone + Computer Audio) [Recommended]",
             "🔊 Computer / Meeting Audio (YouTube, Zoom, Teams, Meet)",
-            "🎙️ Microphone (Your Voice / Speech)",
-            "🎙️+🔊 Dual Capture (Microphone + Computer Audio)"
+            "🎙️ Microphone (Your Voice / Speech)"
         ]
         
-        current_src = self.config.get("AUDIO_SOURCE", "loopback")
-        curr_idx = 0 if current_src == "loopback" else (1 if current_src == "mic" else 2)
+        current_src = self.config.get("AUDIO_SOURCE", "dual")
+        curr_idx = 0 if current_src == "dual" else (1 if current_src == "loopback" else 2)
 
         item, ok = QInputDialog.getItem(
             self, "Select Audio Source",
@@ -1847,17 +2001,16 @@ class NativeAssistant(QMainWindow):
             options, curr_idx, False
         )
         if ok and item:
-            if "Computer" in item:
+            if "Dual" in item:
+                self.config["AUDIO_SOURCE"] = "dual"
+                label = "Dual Audio (Mic + Computer)"
+            elif "Computer" in item:
                 self.config["AUDIO_SOURCE"] = "loopback"
                 label = "Computer Audio"
-            elif "Microphone" in item and "Dual" not in item:
+            else:
                 self.config["AUDIO_SOURCE"] = "mic"
                 label = "Microphone"
-            else:
-                self.config["AUDIO_SOURCE"] = "dual"
-                label = "Dual Audio"
 
-            # Remove old raw device index
             self.config.pop("AUDIO_DEVICE_INDEX", None)
             save_config(self.config)
             self.status_pill.setText(f"🎧 Set: {label}")
@@ -1953,16 +2106,16 @@ class NativeAssistant(QMainWindow):
         self.status_pill.show()
         threading.Thread(target=self._stream_response, args=(full_prompt,), daemon=True).start()
 
-    def send_text_prompt(self):
+    def send_text_prompt(self, audio_bytes=None):
         if self.is_generating:
             return
         text = self.text_input.text().strip()
-        if not text:
+        if not text and not audio_bytes:
             return
         self.text_input.clear()
-        self.add_message(text, is_user=True)
+        self.add_message(text if text else "🎙️ [Audio Query]", is_user=True)
         self.scroll_to_bottom()
-        self.conversation_history.append({"role": "user", "text": text, "image_bytes": None})
+        self.conversation_history.append({"role": "user", "text": text, "image_bytes": None, "audio_bytes": audio_bytes})
 
         if not self.ai_ready:
             self.add_message("⚠️ API key required. Click ⚙️ to configure.", is_user=False)
@@ -1973,9 +2126,9 @@ class NativeAssistant(QMainWindow):
         self.current_ai_bubble = self.add_message("", is_user=False)
         self.status_pill.setText("Generating answer...")
         self.status_pill.show()
-        threading.Thread(target=self._stream_response, args=(text,), daemon=True).start()
+        threading.Thread(target=self._stream_response, args=(text,), kwargs={"audio_bytes": audio_bytes}, daemon=True).start()
 
-    def _stream_response(self, prompt, image_bytes=None):
+    def _stream_response(self, prompt, image_bytes=None, audio_bytes=None):
         candidate_models = [
             "gemini-3.5-flash-lite",
             "gemini-3.5-flash",
@@ -1989,29 +2142,40 @@ class NativeAssistant(QMainWindow):
         # Build full multi-turn context from conversation history (retaining up to last 12 turns)
         contents = []
         recent_turns = self.conversation_history[-12:]
-        for turn in recent_turns:
+        for idx, turn in enumerate(recent_turns):
             parts = []
             if turn.get("text"):
                 parts.append(types.Part.from_text(text=turn["text"]))
-            if turn.get("image_bytes"):
-                parts.append(types.Part.from_bytes(
-                    data=turn["image_bytes"],
-                    mime_type="image/jpeg"
-                ))
+            # Only attach media bytes to the most recent turn for peak speed & bandwidth efficiency
+            if idx == len(recent_turns) - 1:
+                if turn.get("image_bytes"):
+                    parts.append(types.Part.from_bytes(
+                        data=turn["image_bytes"],
+                        mime_type="image/jpeg"
+                    ))
+                if turn.get("audio_bytes"):
+                    parts.append(types.Part.from_bytes(
+                        data=turn["audio_bytes"],
+                        mime_type="audio/wav"
+                    ))
             if parts:
                 contents.append(types.Content(role=turn["role"], parts=parts))
 
         if not contents:
+            parts = []
+            if prompt:
+                parts.append(types.Part.from_text(text=prompt))
             if image_bytes:
-                contents = [
-                    prompt,
-                    types.Part.from_bytes(
-                        data=image_bytes,
-                        mime_type="image/jpeg"
-                    )
-                ]
-            else:
-                contents = prompt
+                parts.append(types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type="image/jpeg"
+                ))
+            if audio_bytes:
+                parts.append(types.Part.from_bytes(
+                    data=audio_bytes,
+                    mime_type="audio/wav"
+                ))
+            contents = parts
 
         persona_instruction = self.config.get("PERSONA", "")
         system_prompt = (
@@ -2170,99 +2334,245 @@ class NativeAssistant(QMainWindow):
         self.is_listening = True
         self.manual_voice_stop_requested = False
         self.update_voice_button_style()
-        self.status_pill.setText("🎙️ Listening... Click mic to stop")
+        self.status_pill.setText("🎙️ Listening... Speak now (Click mic to stop)")
         self.status_pill.show()
 
         def listen_worker():
             frames = []
-            sample_rate = 16000
-            sample_width = 2
-            try:
-                r = sr.Recognizer()
-                with self._get_microphone() as src:
-                    sample_rate = src.SAMPLE_RATE
-                    sample_width = src.SAMPLE_WIDTH
-                    
-                    try:
-                        r.adjust_for_ambient_noise(src, duration=0.25)
-                    except Exception:
-                        pass
-                    energy_threshold = max(180, min(r.energy_threshold, 380))
-                    
+            sample_rate = 48000
+            mic_dev, loop_dev = self._get_wasapi_audio_devices()
+            audio_src = self.config.get("AUDIO_SOURCE", "dual")
+
+            if PYAUDIO_AVAILABLE and (mic_dev or loop_dev):
+                p = pyaudio.PyAudio()
+                stream_mic = None
+                stream_loop = None
+
+                use_mic = (audio_src in ["dual", "mic"]) and (mic_dev is not None)
+                use_loop = (audio_src in ["dual", "loopback"]) and (loop_dev is not None)
+                if not use_mic and not use_loop:
+                    use_mic = mic_dev is not None
+                    use_loop = loop_dev is not None
+
+                try:
+                    channels_mic = 2
+                    channels_loop = 2
+
+                    if use_mic and mic_dev:
+                        sample_rate = int(mic_dev['defaultSampleRate'])
+                        channels_mic = mic_dev['maxInputChannels']
+                        stream_mic = p.open(
+                            format=pyaudio.paInt16,
+                            channels=channels_mic,
+                            rate=sample_rate,
+                            input=True,
+                            input_device_index=mic_dev['index'],
+                            frames_per_buffer=1024
+                        )
+
+                    if use_loop and loop_dev:
+                        sample_rate = int(loop_dev['defaultSampleRate'])
+                        channels_loop = loop_dev['maxInputChannels']
+                        stream_loop = p.open(
+                            format=pyaudio.paInt16,
+                            channels=channels_loop,
+                            rate=sample_rate,
+                            input=True,
+                            input_device_index=loop_dev['index'],
+                            frames_per_buffer=1024
+                        )
+
                     self.signals.voice_status_signal.emit("🎙️ Listening... Speak now (Click mic to stop)", "active")
-                    
-                    has_speech_started = False
-                    speech_start_time = None
-                    silence_start_time = None
-                    start_wait_time = time.time()
-                    
-                    # Read audio in small non-blocking chunks; exits cleanly whenever self.is_listening becomes False
+                    has_speech = False
+                    speech_start = None
+                    silence_start = None
+                    start_wait = time.time()
+                    last_interim_time = 0
+                    is_interim_working = False
+
                     while self.is_listening and not self.manual_voice_stop_requested:
-                        try:
-                            buf = src.stream.read(src.CHUNK)
-                        except Exception:
-                            break
-                        
-                        frames.append(buf)
-                        
-                        try:
-                            chunk_energy = sr.audioop.rms(buf, src.SAMPLE_WIDTH)
-                        except Exception:
-                            chunk_energy = 0
-                            
-                        now = time.time()
-                        
-                        if chunk_energy > energy_threshold:
-                            if not has_speech_started:
-                                has_speech_started = True
-                                speech_start_time = now
-                            silence_start_time = None
+                        loop_mono = None
+                        mic_mono = None
+
+                        if stream_loop:
+                            try:
+                                b_l = stream_loop.read(1024, exception_on_overflow=False)
+                                loop_mono = sr.audioop.tomono(b_l, 2, 0.5, 0.5) if channels_loop == 2 else b_l
+                            except Exception:
+                                pass
+
+                        if stream_mic:
+                            try:
+                                b_m = stream_mic.read(1024, exception_on_overflow=False)
+                                mic_mono = sr.audioop.tomono(b_m, 2, 0.5, 0.5) if channels_mic == 2 else b_m
+                            except Exception:
+                                pass
+
+                        rms_l = sr.audioop.rms(loop_mono, 2) if loop_mono else 0
+                        rms_m = sr.audioop.rms(mic_mono, 2) if mic_mono else 0
+
+                        # Dynamic gain normalization for high speech accuracy
+                        if loop_mono and rms_l > 70:
+                            gain_l = max(1.0, min(3.0, 5000.0 / max(rms_l, 1)))
+                            if gain_l > 1.05:
+                                loop_mono = sr.audioop.mul(loop_mono, 2, gain_l)
+
+                        if mic_mono and rms_m > 70:
+                            gain_m = max(1.0, min(4.0, 5000.0 / max(rms_m, 1)))
+                            if gain_m > 1.05:
+                                mic_mono = sr.audioop.mul(mic_mono, 2, gain_m)
+
+                        if loop_mono and mic_mono:
+                            mixed = sr.audioop.add(loop_mono, mic_mono, 2)
+                        elif mic_mono:
+                            mixed = mic_mono
+                        elif loop_mono:
+                            mixed = loop_mono
                         else:
-                            if has_speech_started:
-                                if silence_start_time is None:
-                                    silence_start_time = now
-                                elif now - silence_start_time >= 1.3:
-                                    # Silence detected after speech -> finished naturally
+                            mixed = None
+
+                        if not mixed:
+                            time.sleep(0.01)
+                            continue
+
+                        frames.append(mixed)
+                        chunk_energy = max(rms_m, rms_l, sr.audioop.rms(mixed, 2))
+                        now = time.time()
+
+                        if chunk_energy > 260:
+                            if not has_speech:
+                                has_speech = True
+                                speech_start = now
+                            silence_start = None
+                        else:
+                            if has_speech:
+                                if silence_start is None:
+                                    silence_start = now
+                                elif now - silence_start >= 1.3:
                                     break
                             else:
-                                if now - start_wait_time > 8.0:
-                                    # Initial wait timeout if no speech started
+                                if now - start_wait > 9.0:
                                     break
-                                    
-                        if has_speech_started and (now - speech_start_time > 35.0):
+
+                        # Live interim text analysis in background thread
+                        if has_speech and (now - last_interim_time >= 0.85) and not is_interim_working and len(frames) >= 20:
+                            last_interim_time = now
+                            is_interim_working = True
+                            snap = list(frames)
+                            def _do_interim_manual(s_frames, s_rate):
+                                nonlocal is_interim_working
+                                try:
+                                    raw_snap = b"".join(s_frames)
+                                    down_16k, _ = sr.audioop.ratecv(raw_snap, 2, 1, s_rate, 16000, None)
+                                    r_sub = sr.Recognizer()
+                                    aud = sr.AudioData(down_16k, 16000, 2)
+                                    p_txt = ""
+                                    try:
+                                        p_txt = r_sub.recognize_google(aud, language="en-US")
+                                    except Exception:
+                                        try:
+                                            p_txt = r_sub.recognize_google(aud, language="en-IN")
+                                        except Exception:
+                                            p_txt = ""
+                                    if p_txt and p_txt.strip():
+                                        clean_p = p_txt.strip()
+                                        if len(clean_p) > 36:
+                                            clean_p = "..." + clean_p[-33:]
+                                        self.signals.voice_status_signal.emit(f"🎙️ \"{clean_p}\"", "interim")
+                                except Exception:
+                                    pass
+                                finally:
+                                    is_interim_working = False
+
+                            threading.Thread(target=_do_interim_manual, args=(snap, sample_rate), daemon=True).start()
+
+                        if has_speech and (now - speech_start > 35.0):
                             break
-                            
-            except Exception as e:
-                print(f"Voice recording error: {e}")
-            finally:
-                self.is_listening = False
-            
-            # Transcribe captured audio frames safely
-            if frames and len(frames) > 6:
+
+                except Exception as e:
+                    print(f"Manual voice recording error: {e}")
+                finally:
+                    self.is_listening = False
+                    if stream_mic:
+                        try: stream_mic.stop_stream(); stream_mic.close()
+                        except Exception: pass
+                    if stream_loop:
+                        try: stream_loop.stop_stream(); stream_loop.close()
+                        except Exception: pass
+                    p.terminate()
+
+            else:
+                try:
+                    r = sr.Recognizer()
+                    with self._get_microphone() as src:
+                        sample_rate = src.SAMPLE_RATE
+                        r.adjust_for_ambient_noise(src, duration=0.25)
+                        self.signals.voice_status_signal.emit("🎙️ Listening... Speak now (Click mic to stop)", "active")
+                        has_speech = False
+                        speech_start = None
+                        silence_start = None
+                        start_wait = time.time()
+
+                        while self.is_listening and not self.manual_voice_stop_requested:
+                            try:
+                                buf = src.stream.read(src.CHUNK)
+                            except Exception:
+                                break
+                            frames.append(buf)
+                            chunk_energy = sr.audioop.rms(buf, src.SAMPLE_WIDTH)
+                            now = time.time()
+                            if chunk_energy > 280:
+                                if not has_speech:
+                                    has_speech = True
+                                    speech_start = now
+                                silence_start = None
+                            else:
+                                if has_speech:
+                                    if silence_start is None:
+                                        silence_start = now
+                                    elif now - silence_start >= 1.3:
+                                        break
+                                else:
+                                    if now - start_wait > 9.0:
+                                        break
+                            if has_speech and (now - speech_start > 35.0):
+                                break
+                except Exception as e:
+                    print(f"Fallback recording error: {e}")
+                finally:
+                    self.is_listening = False
+
+            # Finalize captured audio
+            if frames and len(frames) > 8:
                 self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
                 try:
                     raw_data = b"".join(frames)
-                    audio_data = sr.AudioData(raw_data, sample_rate, sample_width)
+                    wav_bytes, data_16k = self._pcm_to_16k_wav(raw_data, sample_rate)
                     r = sr.Recognizer()
                     text = ""
                     try:
+                        audio_data = sr.AudioData(data_16k, 16000, 2)
                         text = r.recognize_google(audio_data, language="en-US")
                     except Exception:
                         try:
+                            audio_data = sr.AudioData(data_16k, 16000, 2)
                             text = r.recognize_google(audio_data, language="en-IN")
                         except Exception:
                             text = ""
-                    
-                    if text and text.strip():
-                        self.signals.voice_transcribed.emit(text.strip())
+
+                    clean_text = text.strip() if text else ""
+                    if clean_text:
+                        self.signals.voice_transcribed.emit(clean_text, wav_bytes)
+                    elif wav_bytes and len(frames) >= 25:
+                        self.signals.voice_transcribed.emit("🎙️ [Audio Query]", wav_bytes)
                     else:
                         self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
                 except Exception as e:
-                    print(f"Transcription error: {e}")
+                    print(f"Manual transcription error: {e}")
                     self.signals.voice_status_signal.emit("⚠️ Could not transcribe", "error")
             else:
                 self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
-                
+
             self.signals.voice_finished_signal.emit()
 
         threading.Thread(target=listen_worker, daemon=True).start()
@@ -2278,11 +2588,14 @@ class NativeAssistant(QMainWindow):
         if not self.is_listening and "Listening" in self.status_pill.text():
             self.status_pill.hide()
 
-    def on_voice_transcribed(self, text):
+    def on_voice_transcribed(self, text, audio_bytes=None):
         if self.is_generating:
             return
-        self.text_input.setText(text)
-        self.send_text_prompt()
+        if not text and not audio_bytes:
+            return
+        display_text = text if text else "🎙️ [Audio Query]"
+        self.text_input.setText(display_text)
+        self.send_text_prompt(audio_bytes=audio_bytes)
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Space and not self.text_input.hasFocus():
