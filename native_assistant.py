@@ -1198,7 +1198,7 @@ class NativeAssistant(QMainWindow):
         dock_center_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.cam_btn = QPushButton("📷")
-        self.cam_btn.setToolTip("1-Click Screen Capture (Ctrl+Shift+S)")
+        self.cam_btn.setToolTip("1-Click Screen Capture (Alt+S or F9)")
         self.cam_btn.setFixedSize(36, 36)
         self.cam_btn.setStyleSheet("""
             QPushButton {
@@ -1216,7 +1216,7 @@ class NativeAssistant(QMainWindow):
         dock_center_layout.addWidget(self.cam_btn)
 
         self.voice_btn = QPushButton("🎙️")
-        self.voice_btn.setToolTip("Voice Dictation (Press Space when focused, or Ctrl+Shift+V)")
+        self.voice_btn.setToolTip("Voice Dictation (Click to Start / Stop, or Alt+V / F7)")
         self.voice_btn.setFixedSize(42, 42)
         self.voice_btn.setStyleSheet("""
             QPushButton {
@@ -1547,19 +1547,35 @@ class NativeAssistant(QMainWindow):
             if loop_dev is None and def_out.get('isLoopbackDevice', False):
                 loop_dev = def_out
 
-            # 2. Input Microphone device (Physical Voice Mic)
-            def_in_idx = wasapi_info.get('defaultInputDevice')
-            if def_in_idx is not None and def_in_idx >= 0:
-                d = p.get_device_info_by_index(def_in_idx)
+            # 2. Real Physical Microphone device
+            # Check DirectSound first: DirectSound routes physical microphone with real hardware sound on Windows/Realtek
+            for i in range(p.get_device_count()):
+                d = p.get_device_info_by_index(i)
                 if d.get('maxInputChannels', 0) > 0 and not d.get('isLoopbackDevice', False):
-                    mic_dev = d
+                    api = p.get_host_api_info_by_index(d['hostApi'])
+                    if "DirectSound" in api.get('name', '') and "Microphone" in d.get('name', ''):
+                        mic_dev = d
+                        break
 
             if mic_dev is None:
                 for i in range(p.get_device_count()):
                     d = p.get_device_info_by_index(i)
-                    if d.get('hostApi') == wasapi_idx and d.get('maxInputChannels', 0) > 0 and not d.get('isLoopbackDevice', False):
-                        mic_dev = d
-                        break
+                    if d.get('maxInputChannels', 0) > 0 and not d.get('isLoopbackDevice', False):
+                        api = p.get_host_api_info_by_index(d['hostApi'])
+                        if "DirectSound" in api.get('name', ''):
+                            mic_dev = d
+                            break
+
+            if mic_dev is None:
+                try:
+                    mic_dev = p.get_default_input_device_info()
+                except Exception:
+                    pass
+
+            if mic_dev is None:
+                def_in_idx = wasapi_info.get('defaultInputDevice')
+                if def_in_idx is not None and def_in_idx >= 0:
+                    mic_dev = p.get_device_info_by_index(def_in_idx)
         except Exception as e:
             print(f"WASAPI device detection error: {e}")
         finally:
@@ -1687,9 +1703,12 @@ class NativeAssistant(QMainWindow):
                     channels_loop = 2
                     channels_mic = 2
 
+                    sample_rate = 48000
+                    channels_loop = 2
+                    channels_mic = 2
+
                     if use_loop and loop_dev:
-                        sample_rate = int(loop_dev['defaultSampleRate'])
-                        channels_loop = loop_dev['maxInputChannels']
+                        channels_loop = loop_dev.get('maxInputChannels', 2)
                         stream_loop = p.open(
                             format=pyaudio.paInt16,
                             channels=channels_loop,
@@ -1700,8 +1719,7 @@ class NativeAssistant(QMainWindow):
                         )
 
                     if use_mic and mic_dev:
-                        sample_rate = int(mic_dev['defaultSampleRate'])
-                        channels_mic = mic_dev['maxInputChannels']
+                        channels_mic = mic_dev.get('maxInputChannels', 2)
                         stream_mic = p.open(
                             format=pyaudio.paInt16,
                             channels=channels_mic,
@@ -1741,13 +1759,13 @@ class NativeAssistant(QMainWindow):
                         rms_m = sr.audioop.rms(mic_mono, 2) if mic_mono else 0
 
                         # Dynamic normalization for crisp speech clarity
-                        if loop_mono and rms_l > 70:
+                        if loop_mono and rms_l > 40:
                             gain_l = max(1.0, min(3.0, 5000.0 / max(rms_l, 1)))
                             if gain_l > 1.05:
                                 loop_mono = sr.audioop.mul(loop_mono, 2, gain_l)
 
-                        if mic_mono and rms_m > 70:
-                            gain_m = max(1.0, min(4.0, 5000.0 / max(rms_m, 1)))
+                        if mic_mono and rms_m > 40:
+                            gain_m = max(1.0, min(5.0, 5000.0 / max(rms_m, 1)))
                             if gain_m > 1.05:
                                 mic_mono = sr.audioop.mul(mic_mono, 2, gain_m)
 
@@ -1767,7 +1785,7 @@ class NativeAssistant(QMainWindow):
                         chunk_energy = max(rms_l, rms_m, sr.audioop.rms(mixed, 2))
                         now = time.time()
 
-                        if chunk_energy > 280:
+                        if chunk_energy > 180:
                             if not has_speech:
                                 has_speech = True
                                 speech_start = now
@@ -2398,12 +2416,12 @@ class NativeAssistant(QMainWindow):
                     use_loop = loop_dev is not None
 
                 try:
+                    sample_rate = 48000
                     channels_mic = 2
                     channels_loop = 2
 
                     if use_mic and mic_dev:
-                        sample_rate = int(mic_dev['defaultSampleRate'])
-                        channels_mic = mic_dev['maxInputChannels']
+                        channels_mic = mic_dev.get('maxInputChannels', 2)
                         stream_mic = p.open(
                             format=pyaudio.paInt16,
                             channels=channels_mic,
@@ -2414,8 +2432,7 @@ class NativeAssistant(QMainWindow):
                         )
 
                     if use_loop and loop_dev:
-                        sample_rate = int(loop_dev['defaultSampleRate'])
-                        channels_loop = loop_dev['maxInputChannels']
+                        channels_loop = loop_dev.get('maxInputChannels', 2)
                         stream_loop = p.open(
                             format=pyaudio.paInt16,
                             channels=channels_loop,
@@ -2455,13 +2472,13 @@ class NativeAssistant(QMainWindow):
                         rms_m = sr.audioop.rms(mic_mono, 2) if mic_mono else 0
 
                         # Dynamic gain normalization for high speech accuracy
-                        if loop_mono and rms_l > 70:
+                        if loop_mono and rms_l > 40:
                             gain_l = max(1.0, min(3.0, 5000.0 / max(rms_l, 1)))
                             if gain_l > 1.05:
                                 loop_mono = sr.audioop.mul(loop_mono, 2, gain_l)
 
-                        if mic_mono and rms_m > 70:
-                            gain_m = max(1.0, min(4.0, 5000.0 / max(rms_m, 1)))
+                        if mic_mono and rms_m > 40:
+                            gain_m = max(1.0, min(5.0, 5000.0 / max(rms_m, 1)))
                             if gain_m > 1.05:
                                 mic_mono = sr.audioop.mul(mic_mono, 2, gain_m)
 
@@ -2482,7 +2499,7 @@ class NativeAssistant(QMainWindow):
                         chunk_energy = max(rms_m, rms_l, sr.audioop.rms(mixed, 2))
                         now = time.time()
 
-                        if chunk_energy > 260:
+                        if chunk_energy > 180:
                             if not has_speech:
                                 has_speech = True
                                 speech_start = now
@@ -2672,6 +2689,27 @@ class NativeAssistant(QMainWindow):
     def setup_hotkeys(self):
         if KEYBOARD_AVAILABLE:
             try:
+                # Primary Non-Ctrl Hotkeys (Safe from proctoring/app key blocks)
+                # Toggle window visibility: Alt+Space OR single-key F8
+                keyboard.add_hotkey('alt+space', lambda: self.signals.toggle_window_signal.emit())
+                keyboard.add_hotkey('f8', lambda: self.signals.toggle_window_signal.emit())
+
+                # Screen capture: Alt+S OR F9
+                keyboard.add_hotkey('alt+s', lambda: self.signals.trigger_camera_signal.emit())
+                keyboard.add_hotkey('f9', lambda: self.signals.trigger_camera_signal.emit())
+
+                # Voice dictation: Alt+V OR F7
+                keyboard.add_hotkey('alt+v', lambda: self.start_voice_input())
+                keyboard.add_hotkey('f7', lambda: self.start_voice_input())
+
+                # Transparency toggle: Alt+G OR F10
+                keyboard.add_hotkey('alt+g', lambda: self.toggle_transparency())
+                keyboard.add_hotkey('f10', lambda: self.toggle_transparency())
+
+                # Click-through toggle: Alt+T
+                keyboard.add_hotkey('alt+t', lambda: self.toggle_type_through_global())
+
+                # Legacy Ctrl shortcuts (if Ctrl is permitted)
                 keyboard.add_hotkey('ctrl+space', lambda: self.signals.toggle_window_signal.emit())
                 keyboard.add_hotkey('ctrl+g', lambda: self.toggle_transparency())
                 keyboard.add_hotkey('ctrl+t', lambda: self.toggle_type_through_global())
