@@ -1597,6 +1597,62 @@ class NativeAssistant(QMainWindow):
             print(f"WAV conversion error: {e}")
             return None, None
 
+    def _transcribe_audio_buffer(self, data_16k, wav_bytes):
+        """
+        Two-stage high-accuracy transcriber:
+        1. Fast Google Speech Recognition (US + Indian English)
+        2. Intelligent Gemini Flash Multimodal Speech-to-Text Fallback
+        Returns clean, intelligible human spoken words, or empty string if only noise/music/silence.
+        """
+        text = ""
+        r = sr.Recognizer()
+
+        # 1. Fast Google Web Speech Recognition
+        try:
+            audio_data = sr.AudioData(data_16k, 16000, 2)
+            text = r.recognize_google(audio_data, language="en-US")
+        except Exception:
+            try:
+                audio_data = sr.AudioData(data_16k, 16000, 2)
+                text = r.recognize_google(audio_data, language="en-IN")
+            except Exception:
+                text = ""
+
+        clean = text.strip() if text else ""
+        if clean:
+            return clean
+
+        # 2. Intelligent Gemini Multimodal Speech Transcriber Fallback
+        if wav_bytes and getattr(self, 'client', None) and GENAI_AVAILABLE:
+            try:
+                prompt_parts = [
+                    types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav"),
+                    "You are a precise speech-to-text transcriber for technical interviews and meetings. "
+                    "Listen to this audio clip and transcribe the EXACT words spoken by the human speaker. "
+                    "Return ONLY the plain transcribed words. "
+                    "If the audio contains only background stadium noise, music, cheering, commentary noise, silence, coughs, or no intelligible human speech, respond with exactly: NO_SPEECH."
+                ]
+                res = self.client.models.generate_content(
+                    model="gemini-3.5-flash-lite",
+                    contents=prompt_parts
+                )
+                if res and res.text:
+                    cand = res.text.strip().strip('"').strip("'")
+                    cand_upper = cand.upper()
+                    if (
+                        cand
+                        and not cand_upper.startswith("NO_SPEECH")
+                        and not cand_upper.startswith("NO SPEECH")
+                        and "EMPTY" not in cand_upper
+                        and cand_upper != "00:00"
+                        and len(cand) >= 2
+                    ):
+                        clean = cand
+            except Exception as e:
+                print(f"Gemini fallback transcription error: {e}")
+
+        return clean
+
     def start_auto_mode(self):
         self.is_auto_running = True
         threading.Thread(target=self._auto_listener_loop, daemon=True).start()
@@ -1776,24 +1832,11 @@ class NativeAssistant(QMainWindow):
                         self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
                         raw_data = b"".join(frames)
                         wav_bytes, data_16k = self._pcm_to_16k_wav(raw_data, sample_rate)
-                        text = ""
-                        try:
-                            audio_data = sr.AudioData(data_16k, 16000, 2)
-                            text = r.recognize_google(audio_data, language="en-US")
-                        except Exception:
-                            try:
-                                audio_data = sr.AudioData(data_16k, 16000, 2)
-                                text = r.recognize_google(audio_data, language="en-IN")
-                            except Exception:
-                                text = ""
+                        clean_text = self._transcribe_audio_buffer(data_16k, wav_bytes)
 
-                        clean_text = text.strip() if text else ""
-                        if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 7:
+                        if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 5:
                             if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
                                 self.signals.voice_transcribed.emit(clean_text, wav_bytes)
-                        elif wav_bytes and len(frames) >= 40:
-                            if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
-                                self.signals.voice_transcribed.emit("🎙️ [Audio Query]", wav_bytes)
 
                 except Exception as e:
                     print(f"Auto dual listener error: {e}")
@@ -2110,10 +2153,10 @@ class NativeAssistant(QMainWindow):
         if self.is_generating:
             return
         text = self.text_input.text().strip()
-        if not text and not audio_bytes:
+        if not text:
             return
         self.text_input.clear()
-        self.add_message(text if text else "🎙️ [Audio Query]", is_user=True)
+        self.add_message(text, is_user=True)
         self.scroll_to_bottom()
         self.conversation_history.append({"role": "user", "text": text, "image_bytes": None, "audio_bytes": audio_bytes})
 
@@ -2548,23 +2591,10 @@ class NativeAssistant(QMainWindow):
                 try:
                     raw_data = b"".join(frames)
                     wav_bytes, data_16k = self._pcm_to_16k_wav(raw_data, sample_rate)
-                    r = sr.Recognizer()
-                    text = ""
-                    try:
-                        audio_data = sr.AudioData(data_16k, 16000, 2)
-                        text = r.recognize_google(audio_data, language="en-US")
-                    except Exception:
-                        try:
-                            audio_data = sr.AudioData(data_16k, 16000, 2)
-                            text = r.recognize_google(audio_data, language="en-IN")
-                        except Exception:
-                            text = ""
+                    clean_text = self._transcribe_audio_buffer(data_16k, wav_bytes)
 
-                    clean_text = text.strip() if text else ""
-                    if clean_text:
+                    if clean_text and len(clean_text) >= 2:
                         self.signals.voice_transcribed.emit(clean_text, wav_bytes)
-                    elif wav_bytes and len(frames) >= 25:
-                        self.signals.voice_transcribed.emit("🎙️ [Audio Query]", wav_bytes)
                     else:
                         self.signals.voice_status_signal.emit("⚠️ No speech detected", "error")
                 except Exception as e:
@@ -2591,10 +2621,10 @@ class NativeAssistant(QMainWindow):
     def on_voice_transcribed(self, text, audio_bytes=None):
         if self.is_generating:
             return
-        if not text and not audio_bytes:
+        clean = text.strip() if text else ""
+        if not clean or clean.lower() in ["[audio query]", "audio query", "no_speech"]:
             return
-        display_text = text if text else "🎙️ [Audio Query]"
-        self.text_input.setText(display_text)
+        self.text_input.setText(clean)
         self.send_text_prompt(audio_bytes=audio_bytes)
 
     def keyPressEvent(self, event):
