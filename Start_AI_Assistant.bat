@@ -1,5 +1,5 @@
 @echo off
-title AI Assistant Launcher
+title Aura AI Assistant Launcher
 
 :: Check for Python
 python --version >nul 2>&1
@@ -17,10 +17,16 @@ if %errorlevel% neq 0 (
     exit /b
 )
 
-:: Install dependencies silently
-echo Checking and installing required libraries (this takes a few seconds)...
-pip install PyQt6 google-generativeai pillow keyboard uiautomation SpeechRecognition pyaudio --quiet
+:: Kill any stuck previous background pythonw instances so mic and ports are freed
+taskkill /F /FI "IMAGENAME eq pythonw.exe" /FI "WINDOWTITLE eq *" >nul 2>&1
 
-:: Boot the Native app using pythonw (no black terminal window)
+:: Quick check if dependencies are already installed (avoids 10-second pip lag on every launch)
+python -c "import PyQt6, google.genai, PIL, keyboard, speech_recognition, pyaudiowpatch" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo First-time setup: Installing required audio and AI libraries...
+    pip install PyQt6 google-genai pillow keyboard speechrecognition pyaudiowpatch --quiet
+)
+
+:: Boot the Assistant smoothly using pythonw (no black console window)
 start "" pythonw native_assistant.py
-
+exit /b
