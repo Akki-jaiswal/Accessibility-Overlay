@@ -6,6 +6,8 @@ import json
 import threading
 import time
 import re
+import ctypes
+from ctypes import wintypes
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel, QScrollArea, QFrame, QTextBrowser,
