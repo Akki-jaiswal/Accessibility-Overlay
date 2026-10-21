@@ -18,7 +18,7 @@ if %errorlevel% neq 0 (
 )
 
 :: Kill any stuck previous background pythonw instances so mic and ports are freed
-taskkill /F /FI "IMAGENAME eq pythonw.exe" /FI "WINDOWTITLE eq *" >nul 2>&1
+taskkill /F /IM pythonw.exe >nul 2>&1
 
 :: Quick check if dependencies are already installed (avoids 10-second pip lag on every launch)
 python -c "import PyQt6, google.genai, PIL, keyboard, speech_recognition, pyaudiowpatch" >nul 2>&1

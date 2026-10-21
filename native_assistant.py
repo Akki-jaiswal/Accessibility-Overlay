@@ -1020,8 +1020,9 @@ class NativeAssistant(QMainWindow):
 
         self.close_btn = QPushButton("✕")
         self.close_btn.setFixedSize(22, 22)
+        self.close_btn.setToolTip("Quit Aura Completely")
         self.close_btn.setStyleSheet("QPushButton { background: transparent; border: none; color: #94a3b8; font-size: 12px; font-weight: bold; } QPushButton:hover { background-color: #ef4444; color: white; border-radius: 4px; }")
-        self.close_btn.clicked.connect(self.close)
+        self.close_btn.clicked.connect(self.quit_application)
         header_layout.addWidget(self.close_btn)
 
         container_layout.addWidget(self.header)
@@ -2139,7 +2140,11 @@ class NativeAssistant(QMainWindow):
         persona_act = menu.addAction("🎛️ Customize Persona & Instructions")
         persona_act.triggered.connect(self.prompt_persona)
 
-        btn_pos = self.key_btn.mapToGlobal(QPoint(0, -115))
+        menu.addSeparator()
+        quit_act = menu.addAction("❌ Quit Aura Completely")
+        quit_act.triggered.connect(self.quit_application)
+
+        btn_pos = self.key_btn.mapToGlobal(QPoint(0, -145))
         menu.exec(btn_pos)
 
     def add_message(self, text="", is_user=False, is_image=False, pixmap=None):
@@ -2652,6 +2657,35 @@ class NativeAssistant(QMainWindow):
         else:
             super().keyPressEvent(event)
 
+    def quit_application(self):
+        try:
+            self.is_auto_running = False
+            self.is_listening = False
+            self.manual_voice_stop_requested = True
+            if KEYBOARD_AVAILABLE:
+                try:
+                    keyboard.unhook_all()
+                except Exception:
+                    pass
+            try:
+                QLocalServer.removeServer(LOCAL_SERVER_NAME)
+            except Exception:
+                pass
+            if hasattr(self, 'app_mutex') and self.app_mutex:
+                try:
+                    ctypes.windll.kernel32.CloseHandle(self.app_mutex)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+        finally:
+            QApplication.quit()
+            os._exit(0)
+
+    def closeEvent(self, event):
+        self.quit_application()
+        event.accept()
+
     def toggle_visibility(self):
         if self.isVisible() and not self.isMinimized():
             self.hide()
@@ -2724,23 +2758,30 @@ class NativeAssistant(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # Enforce Single-Instance to avoid duplicate overlapping windows
-    local_server = QLocalServer()
-    if not local_server.listen(LOCAL_SERVER_NAME):
-        # Server might already be active; attempt connecting
+    # 1. OS-Level Kernel Mutex: strictly enforces SINGLE INSTANCE across the system
+    ERROR_ALREADY_EXISTS = 183
+    MUTEX_NAME = "AuraAssistantSingleInstanceMutex_Akki"
+    app_mutex = ctypes.windll.kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    is_duplicate = (ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS)
+
+    if is_duplicate:
+        # Existing instance is already running! Wake it up and exit this duplicate immediately
         socket = QLocalSocket()
         socket.connectToServer(LOCAL_SERVER_NAME)
-        if socket.waitForConnected(300):
-            # Already running! Send wake-up signal and exit cleanly
+        if socket.waitForConnected(400):
             socket.write(b"WAKEUP\n")
-            socket.waitForBytesWritten(300)
-            sys.exit(0)
-        else:
-            # Stale pipe remnant from prior crash: remove and re-listen
-            QLocalServer.removeServer(LOCAL_SERVER_NAME)
-            local_server.listen(LOCAL_SERVER_NAME)
+            socket.waitForBytesWritten(400)
+            socket.close()
+        ctypes.windll.kernel32.CloseHandle(app_mutex)
+        sys.exit(0)
+
+    # 2. Local Server for IPC Wakeup
+    QLocalServer.removeServer(LOCAL_SERVER_NAME)
+    local_server = QLocalServer()
+    local_server.listen(LOCAL_SERVER_NAME)
 
     assistant = NativeAssistant()
+    assistant.app_mutex = app_mutex
 
     def on_new_connection():
         client_sock = local_server.nextPendingConnection()
