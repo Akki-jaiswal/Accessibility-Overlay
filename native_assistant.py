@@ -1422,6 +1422,7 @@ class NativeAssistant(QMainWindow):
             self.auto_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.is_auto_running = False
             self.is_auto_listening_paused = False
+            self.hint_label.setText("Press <span style='background:#1e293b; padding:1px 5px; border-radius:4px; border:1px solid #334155; font-family:Consolas,monospace; font-weight:bold; color:#f8fafc;'>Space</span> or the mic to start")
             self.update_voice_button_style()
         else:
             self.auto_btn.setChecked(True)
@@ -1429,6 +1430,7 @@ class NativeAssistant(QMainWindow):
             self.manual_btn.setChecked(False)
             self.manual_btn.setStyleSheet("background-color: transparent; color: #94a3b8; font-size: 11px; font-weight: bold; border: none; border-radius: 10px; padding: 0 10px;")
             self.is_auto_listening_paused = False
+            self.hint_label.setText("Auto Listening — Press <span style='background:#1e293b; padding:1px 5px; border-radius:4px; border:1px solid #334155; font-family:Consolas,monospace; font-weight:bold; color:#f8fafc;'>Space</span> to Answer Instantly")
             self.status_pill.setText("🎧 Auto Mode: Listening to meeting & mic audio...")
             self.status_pill.show()
             QTimer.singleShot(3500, self.status_pill.hide)
@@ -1501,6 +1503,14 @@ class NativeAssistant(QMainWindow):
 
     def on_voice_button_clicked(self):
         if self.current_mode == "auto":
+            # If speech is currently being heard, Space / Click triggers INSTANT SUBMISSION with zero latency!
+            if getattr(self, 'auto_has_speech', False) and getattr(self, 'auto_frames_count', 0) > 3:
+                self.auto_force_submit = True
+                self.status_pill.setText("⚡ Submitting query now...")
+                self.status_pill.show()
+                return
+
+            # Otherwise, toggle pause/resume
             self.is_auto_listening_paused = not self.is_auto_listening_paused
             self.update_voice_button_style()
             if self.is_auto_listening_paused:
@@ -1779,22 +1789,32 @@ class NativeAssistant(QMainWindow):
                             if not has_speech:
                                 has_speech = True
                                 speech_start = now
+                                self.auto_has_speech = True
                             silence_start = None
                             frames.append(mixed_16k)
+                            self.auto_frames_count = len(frames)
                         else:
                             if has_speech:
                                 frames.append(mixed_16k)
+                                self.auto_frames_count = len(frames)
                                 if silence_start is None:
                                     silence_start = now
-                                elif now - silence_start >= 1.1:
+                                elif now - silence_start >= 0.75:
+                                    # Fast natural pause detection (0.75s)
                                     break
                             else:
                                 if now - loop_start > 6.0:
                                     break
                                 time.sleep(0.005)
 
+                        # Instant user trigger via Space key or mic button
+                        if getattr(self, 'auto_force_submit', False):
+                            self.auto_force_submit = False
+                            if has_speech or len(frames) >= 4:
+                                break
+
                         # Live interim analysis before speaking stops
-                        if has_speech and (now - last_interim_time >= 0.7) and not is_interim_working and len(frames) >= 15:
+                        if has_speech and (now - last_interim_time >= 0.6) and not is_interim_working and len(frames) >= 12:
                             last_interim_time = now
                             is_interim_working = True
                             snap_bytes = b"".join(frames)
@@ -1813,6 +1833,8 @@ class NativeAssistant(QMainWindow):
                                             p_txt = ""
                                     if p_txt and p_txt.strip():
                                         clean_p = p_txt.strip()
+                                        self._last_auto_interim_text = clean_p
+                                        self._last_auto_interim_time = time.time()
                                         if len(clean_p) > 36:
                                             clean_p = "..." + clean_p[-33:]
                                         self.signals.voice_status_signal.emit(f"🎙️ \"{clean_p}\"", "interim")
@@ -1826,6 +1848,9 @@ class NativeAssistant(QMainWindow):
                         if has_speech and (now - speech_start > 35.0):
                             break
 
+                    self.auto_has_speech = False
+                    self.auto_frames_count = 0
+
                     if stream_loop:
                         try: stream_loop.stop_stream(); stream_loop.close()
                         except Exception: pass
@@ -1834,13 +1859,17 @@ class NativeAssistant(QMainWindow):
                         except Exception: pass
                     p.terminate()
 
-                    if frames and len(frames) > 10 and not self.is_generating and self.is_auto_running and not self.is_auto_listening_paused:
-                        self.signals.voice_status_signal.emit("✨ Transcribing query...", "transcribing")
+                    if frames and len(frames) > 5 and not self.is_generating and self.is_auto_running and not self.is_auto_listening_paused:
+                        self.signals.voice_status_signal.emit("⚡ Submitting query...", "transcribing")
                         raw_data = b"".join(frames)
                         wav_bytes, data_16k = self._pcm_to_16k_wav(raw_data, 16000)
                         clean_text = self._transcribe_audio_buffer(data_16k, wav_bytes)
 
-                        if clean_text and len(clean_text.split()) >= 2 and len(clean_text) >= 4:
+                        # If full transcription was empty or missed, fallback to the latest real-time interim recognition
+                        if (not clean_text or len(clean_text) < 3) and hasattr(self, '_last_auto_interim_text') and self._last_auto_interim_text:
+                            clean_text = self._last_auto_interim_text
+
+                        if clean_text and len(clean_text.strip()) >= 2:
                             if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
                                 self.signals.voice_transcribed.emit(clean_text, wav_bytes)
 
