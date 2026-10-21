@@ -1518,17 +1518,7 @@ class NativeAssistant(QMainWindow):
                 self.start_voice_input()
 
     def _get_working_mic_index(self):
-        if not hasattr(self, '_cached_mic_index') or self._cached_mic_index is None:
-            best_idx = 5
-            try:
-                if PYAUDIO_AVAILABLE:
-                    mic_dev, _ = self._get_wasapi_audio_devices()
-                    if mic_dev:
-                        best_idx = mic_dev['index']
-            except Exception:
-                pass
-            self._cached_mic_index = best_idx
-        return self._cached_mic_index
+        return None
 
     def _get_wasapi_audio_devices(self):
         if not PYAUDIO_AVAILABLE or pyaudio is None:
@@ -1550,39 +1540,11 @@ class NativeAssistant(QMainWindow):
             except Exception as e:
                 print(f"Loopback detection error: {e}")
 
-            # 2. Real Physical Microphone device
-            # Check devices: DirectSound routes physical microphone with real hardware sound on Windows/Realtek
-            candidates = []
-            for i in range(p.get_device_count()):
-                d = p.get_device_info_by_index(i)
-                if d.get('maxInputChannels', 0) > 0 and not d.get('isLoopbackDevice', False):
-                    name_l = d.get('name', '').lower()
-                    if 'mapper' in name_l:
-                        continue
-                    candidates.append(d)
-
-            # Prioritize DirectSound microphone
-            for d in candidates:
-                api = p.get_host_api_info_by_index(d['hostApi'])
-                if "DirectSound" in api.get('name', '') and ("microphone" in d.get('name', '').lower() or "array" in d.get('name', '').lower()):
-                    mic_dev = d
-                    break
-
-            if mic_dev is None:
-                for d in candidates:
-                    api = p.get_host_api_info_by_index(d['hostApi'])
-                    if "DirectSound" in api.get('name', ''):
-                        mic_dev = d
-                        break
-
-            if mic_dev is None:
-                try:
-                    mic_dev = p.get_default_input_device_info()
-                except Exception:
-                    pass
-
-            if mic_dev is None and candidates:
-                mic_dev = candidates[0]
+            # 2. Default Physical Microphone device
+            try:
+                mic_dev = p.get_default_input_device_info()
+            except Exception:
+                mic_dev = None
         except Exception as e:
             print(f"Audio device detection error: {e}")
         finally:
@@ -1594,13 +1556,7 @@ class NativeAssistant(QMainWindow):
         return loop_dev
 
     def _get_microphone(self):
-        dev_idx = self._get_working_mic_index()
-        try:
-            if dev_idx is not None and dev_idx >= 0:
-                return sr.Microphone(device_index=dev_idx, sample_rate=44100)
-        except Exception:
-            pass
-        return sr.Microphone(sample_rate=44100)
+        return sr.Microphone()
 
     @staticmethod
     def _pcm_to_16k_wav(raw_data, sample_rate):
@@ -1721,13 +1677,12 @@ class NativeAssistant(QMainWindow):
                             frames_per_buffer=1024
                         )
 
-                    if use_mic and mic_dev:
+                    if use_mic:
                         stream_mic = p.open(
                             format=pyaudio.paInt16,
-                            channels=channels_mic,
-                            rate=rate_mic,
+                            channels=1,
+                            rate=16000,
                             input=True,
-                            input_device_index=mic_dev['index'],
                             frames_per_buffer=1024
                         )
 
@@ -1755,15 +1710,14 @@ class NativeAssistant(QMainWindow):
                         if stream_mic:
                             try:
                                 b_m = stream_mic.read(1024, exception_on_overflow=False)
-                                m_m = sr.audioop.tomono(b_m, 2, 0.5, 0.5) if channels_mic == 2 else b_m
-                                calib_mic.append(sr.audioop.rms(m_m, 2))
+                                calib_mic.append(sr.audioop.rms(b_m, 2))
                             except Exception:
                                 pass
 
-                    ambient_mic = (sum(calib_mic) / len(calib_mic)) if calib_mic else 25.0
+                    ambient_mic = (sum(calib_mic) / len(calib_mic)) if calib_mic else 20.0
                     ambient_loop = (sum(calib_loop) / len(calib_loop)) if calib_loop else 25.0
-                    thresh_mic = max(35.0, ambient_mic * 1.5)
-                    thresh_loop = max(45.0, ambient_loop * 1.5)
+                    thresh_mic = max(28.0, ambient_mic * 1.35)
+                    thresh_loop = max(40.0, ambient_loop * 1.35)
 
                     while self.is_auto_running and self.current_mode == "auto" and not self.is_auto_listening_paused and not self.is_generating:
                         m_16k = None
@@ -1783,8 +1737,7 @@ class NativeAssistant(QMainWindow):
                         if stream_mic:
                             try:
                                 b_m = stream_mic.read(1024, exception_on_overflow=False)
-                                mic_mono = sr.audioop.tomono(b_m, 2, 0.5, 0.5) if channels_mic == 2 else b_m
-                                m_16k, _ = sr.audioop.ratecv(mic_mono, 2, 1, rate_mic, 16000, None)
+                                m_16k = b_m
                                 rms_m = sr.audioop.rms(m_16k, 2)
                             except Exception:
                                 pass
@@ -1793,12 +1746,12 @@ class NativeAssistant(QMainWindow):
                         is_loop_active = (rms_l >= thresh_loop) and (l_16k is not None)
 
                         # Software gain normalization for quiet human speech
-                        if m_16k and rms_m > 25:
+                        if m_16k and rms_m > 20:
                             gain_m = max(1.0, min(5.0, 4500.0 / max(rms_m, 1)))
                             if gain_m > 1.05:
                                 m_16k = sr.audioop.mul(m_16k, 2, gain_m)
 
-                        if l_16k and rms_l > 35:
+                        if l_16k and rms_l > 30:
                             gain_l = max(1.0, min(3.0, 4500.0 / max(rms_l, 1)))
                             if gain_l > 1.05:
                                 l_16k = sr.audioop.mul(l_16k, 2, gain_l)
@@ -2439,27 +2392,37 @@ class NativeAssistant(QMainWindow):
 
         def listen_worker():
             frames_16k = []
-            mic_dev, loop_dev = self._get_wasapi_audio_devices()
             audio_src = self.config.get("AUDIO_SOURCE", "dual")
+            _, loop_dev = self._get_wasapi_audio_devices()
 
-            # In manual mode, prioritize physical microphone for dictation
-            target_dev = loop_dev if (audio_src == "loopback" and loop_dev) else (mic_dev or loop_dev)
+            # If user explicitly selected Computer Audio only in settings, use loopback; otherwise always use clean physical microphone
+            use_loopback_only = (audio_src == "loopback") and (loop_dev is not None)
 
-            if PYAUDIO_AVAILABLE and target_dev:
+            if PYAUDIO_AVAILABLE:
                 p = pyaudio.PyAudio()
                 stream = None
                 try:
-                    native_rate = int(target_dev.get('defaultSampleRate', 44100))
-                    native_channels = min(2, target_dev.get('maxInputChannels', 1))
-
-                    stream = p.open(
-                        format=pyaudio.paInt16,
-                        channels=native_channels,
-                        rate=native_rate,
-                        input=True,
-                        input_device_index=target_dev['index'],
-                        frames_per_buffer=1024
-                    )
+                    if use_loopback_only:
+                        native_rate = int(loop_dev.get('defaultSampleRate', 48000))
+                        native_channels = min(2, loop_dev.get('maxInputChannels', 2))
+                        stream = p.open(
+                            format=pyaudio.paInt16,
+                            channels=native_channels,
+                            rate=native_rate,
+                            input=True,
+                            input_device_index=loop_dev['index'],
+                            frames_per_buffer=1024
+                        )
+                    else:
+                        native_rate = 16000
+                        native_channels = 1
+                        stream = p.open(
+                            format=pyaudio.paInt16,
+                            channels=1,
+                            rate=16000,
+                            input=True,
+                            frames_per_buffer=1024
+                        )
 
                     self.signals.voice_status_signal.emit("🎙️ Listening... Speak now (Click mic to stop)", "active")
 
@@ -2471,12 +2434,14 @@ class NativeAssistant(QMainWindow):
                         try:
                             raw = stream.read(1024, exception_on_overflow=False)
                             mono = sr.audioop.tomono(raw, 2, 0.5, 0.5) if native_channels == 2 else raw
+                            if native_rate != 16000:
+                                mono, _ = sr.audioop.ratecv(mono, 2, 1, native_rate, 16000, None)
                             calib_rms.append(sr.audioop.rms(mono, 2))
                         except Exception:
                             pass
 
-                    ambient_floor = (sum(calib_rms) / len(calib_rms)) if calib_rms else 25.0
-                    speech_threshold = max(35.0, ambient_floor * 1.5)
+                    ambient_floor = (sum(calib_rms) / len(calib_rms)) if calib_rms else 20.0
+                    speech_threshold = max(28.0, ambient_floor * 1.35)
 
                     has_speech = False
                     speech_start = None
@@ -2492,13 +2457,15 @@ class NativeAssistant(QMainWindow):
                             break
 
                         mono_chunk = sr.audioop.tomono(raw_chunk, 2, 0.5, 0.5) if native_channels == 2 else raw_chunk
-                        rms = sr.audioop.rms(mono_chunk, 2)
+                        if native_rate != 16000:
+                            chunk_16k, _ = sr.audioop.ratecv(mono_chunk, 2, 1, native_rate, 16000, None)
+                        else:
+                            chunk_16k = mono_chunk
 
-                        # Downsample to 16,000 Hz
-                        chunk_16k, _ = sr.audioop.ratecv(mono_chunk, 2, 1, native_rate, 16000, None)
+                        rms = sr.audioop.rms(chunk_16k, 2)
 
                         # Dynamic gain scaling for soft voices
-                        if rms > 25:
+                        if rms > 15:
                             gain = max(1.0, min(5.0, 4500.0 / max(rms, 1)))
                             if gain > 1.05:
                                 chunk_16k = sr.audioop.mul(chunk_16k, 2, gain)
@@ -2515,15 +2482,21 @@ class NativeAssistant(QMainWindow):
                                 frames_16k.append(chunk_16k)
                                 if silence_start is None:
                                     silence_start = now
-                                elif now - silence_start >= 1.1:
+                                elif now - silence_start >= 1.0:
                                     break
                             else:
+                                if len(frames_16k) < 4:
+                                    frames_16k.append(chunk_16k)
+                                else:
+                                    frames_16k.pop(0)
+                                    frames_16k.append(chunk_16k)
+
                                 if now - start_wait > 9.0:
                                     break
                                 time.sleep(0.005)
 
                         # Live interim recognition while speaking
-                        if has_speech and (now - last_interim_time >= 0.7) and not is_interim_working and len(frames_16k) >= 12:
+                        if has_speech and (now - last_interim_time >= 0.65) and not is_interim_working and len(frames_16k) >= 10:
                             last_interim_time = now
                             is_interim_working = True
                             snap_bytes = b"".join(frames_16k)
