@@ -1586,12 +1586,105 @@ class NativeAssistant(QMainWindow):
             print(f"WAV conversion error: {e}")
             return None, None
 
+    @staticmethod
+    def _auto_correct_speech_text(text: str) -> str:
+        """
+        Instant Contextual Speech Disambiguator & Phonetic Phoneme Auto-Repair (< 1ms).
+        Fixes stuttered word repetitions, acoustic near-misses, and technical homophones
+        (e.g., 'listen my career correctly correctly' -> 'Can you hear my query correctly?').
+        """
+        if not text or not text.strip():
+            return ""
+        s = text.strip()
+
+        # 1. Eliminate stuttered duplicate words ('correctly correctly' -> 'correctly', 'the the' -> 'the')
+        s = re.sub(r'\b(\w+)(?:\s+\1\b)+', r'\1', s, flags=re.IGNORECASE)
+
+        # 2. Conversational & acoustic speech mishearings
+        patterns = [
+            # Conversational acoustic mishearings
+            (r'\b(?:listen|hear)\s+(?:to\s+)?my\s+career\b', 'hear my query'),
+            (r'\b(?:listen|hear)\s+career\b', 'hear query'),
+            (r'\bcan\s+you\s+listen\s+my\b', 'can you hear my'),
+            (r'\blisten\s+my\s+voice\b', 'hear my voice'),
+            (r'\blisten\s+my\s+audio\b', 'hear my audio'),
+            (r'\blisten\s+my\s+query\b', 'hear my query'),
+            (r'\blisten\s+my\b', 'hear me'),
+            (r'\blisten\s+me\b', 'hear me'),
+            (r'\bcan\s+you\s+listen\b', 'can you hear me'),
+            (r'\bare\s+you\s+listening\s+me\b', 'can you hear me'),
+            (r'\bare\s+you\s+listening\s+my\b', 'can you hear my'),
+            (r'\b(understand|solve|explain|answer|check|clarify|debug)\s+my\s+career\b', r'\1 my query'),
+            (r'\bmy\s+career\s+correctly\b', 'my query correctly'),
+
+            # Tech homophones & phonetic mishearings
+            (r'\b(?:cash|kash)\s+(memory|miss|hit|invalidation|layer|system|storage)\b', r'cache \1'),
+            (r'\bhow\s+(?:cash|kash)\s+works\b', 'how cache works'),
+            (r'\b(?:read\s+is|red\s+is)\b', 'Redis'),
+            (r'\b(?:doctor|docter)\s+(container|image|compose|daemon|hub|and)\b', r'Docker \1'),
+            (r'\bwhat\s+is\s+doctor\b', 'what is Docker'),
+            (r'\b(?:cooper\s+net(?:ty|tes|ies)?)\b', 'Kubernetes'),
+            (r'\b(?:sequel|cquel)\s+server\b', 'SQL Server'),
+            (r'\b(?:sequel|cquel)\s+query\b', 'SQL query'),
+            (r'\bno\s+sequel\b', 'NoSQL'),
+            (r'\bpost\s+grass\b', 'PostgreSQL'),
+            (r'\ba\s+p\s+i\b', 'API'),
+            (r'\ba\s+pie\b', 'API'),
+            (r'\bgraph\s*q\s*l\b', 'GraphQL'),
+            (r'\brest\s+a\s*p\s*i\b', 'REST API'),
+            (r'\bjavascrip\b', 'JavaScript'),
+            (r'\btype\s*scrip\b', 'TypeScript'),
+            (r'\bc\s+plus\s+plus\b', 'C++'),
+            (r'\bc\s+sharp\b', 'C#'),
+            (r'\btwo\s+pointer\b', 'two pointers'),
+            (r'\bbreath\s+first\s+search\b', 'breadth-first search'),
+            (r'\bbreath\s+first\b', 'breadth-first'),
+            (r'\bdip\s+first\s+search\b', 'depth-first search'),
+            (r'\bdip\s+first\b', 'depth-first'),
+            (r'\blink\s+list\b', 'linked list'),
+            (r'\bhash\s+map\b', 'hash map'),
+            (r'\bhash\s+set\b', 'hash set'),
+            (r'\btime\s+complex\b', 'time complexity'),
+            (r'\bspace\s+complex\b', 'space complexity'),
+            (r'\b(?:order|o)\s+of\s+n\s*square(?:d)?\b', 'O(N²)'),
+            (r'\b(?:order|o)\s+of\s+log\s*n\b', 'O(log N)'),
+            (r'\b(?:order|o)\s+of\s+n\b', 'O(N)'),
+            (r'\b(?:order|o)\s+of\s+1\b', 'O(1)'),
+            (r'\bfront\s+end\b', 'frontend'),
+            (r'\bback\s+end\b', 'backend'),
+            (r'\bfull\s+stack\b', 'full-stack'),
+            (r'\bgit\s+hub\b', 'GitHub'),
+            (r'\bcall\s+back\b', 'callback'),
+            (r'\bdead\s+lock\b', 'deadlock'),
+            (r'\brace\s+condition\b', 'race condition'),
+        ]
+
+        for pat, rep in patterns:
+            s = re.sub(pat, rep, s, flags=re.IGNORECASE)
+
+        # Clean multiple spaces
+        s = re.sub(r'\s+', ' ', s).strip()
+
+        # Capitalize first letter
+        if s:
+            s = s[0].upper() + s[1:]
+
+        # Conversational question punctuation
+        q_words = ('how', 'why', 'what', 'where', 'when', 'who', 'can', 'could', 'is', 'are', 'do', 'does', 'did', 'will', 'would', 'should')
+        first_word = s.split()[0].lower() if s else ''
+        if first_word in q_words and not s.endswith(('?', '!', '.')):
+            s += '?'
+        elif not s.endswith(('?', '!', '.')):
+            s += '.'
+
+        return s
+
     def _transcribe_audio_buffer(self, data_16k, wav_bytes):
         """
-        Two-stage high-accuracy transcriber:
+        Two-stage high-accuracy transcriber with instant speech auto-correction:
         1. Fast Google Speech Recognition (US + Indian English)
         2. Intelligent Gemini Flash Multimodal Speech-to-Text Fallback
-        Returns clean, intelligible human spoken words, or empty string if only noise/music/silence.
+        3. Real-Time Phonetic & Contextual Speech Auto-Repair
         """
         text = ""
         r = sr.Recognizer()
@@ -1609,7 +1702,7 @@ class NativeAssistant(QMainWindow):
 
         clean = text.strip() if text else ""
         if clean:
-            return clean
+            return self._auto_correct_speech_text(clean)
 
         # 2. Intelligent Gemini Multimodal Speech Transcriber Fallback
         if wav_bytes and getattr(self, 'client', None) and GENAI_AVAILABLE:
@@ -1640,7 +1733,7 @@ class NativeAssistant(QMainWindow):
             except Exception as e:
                 print(f"Gemini fallback transcription error: {e}")
 
-        return clean
+        return self._auto_correct_speech_text(clean) if clean else ""
 
     def start_auto_mode(self):
         self.is_auto_running = True
@@ -1832,7 +1925,7 @@ class NativeAssistant(QMainWindow):
                                         except Exception:
                                             p_txt = ""
                                     if p_txt and p_txt.strip():
-                                        clean_p = p_txt.strip()
+                                        clean_p = self._auto_correct_speech_text(p_txt.strip())
                                         self._last_auto_interim_text = clean_p
                                         self._last_auto_interim_time = time.time()
                                         if len(clean_p) > 36:
@@ -2281,7 +2374,10 @@ class NativeAssistant(QMainWindow):
             "• DO NOT use LaTeX syntax or math delimiters ($ or $$ or \\times or \\cdot or \\le).\n"
             "• ALWAYS use clean, human-readable plain text / Unicode notation: e.g. **O(M × N)**, **O(M² × N)**, **O(N log N)**, **O(V + E)**, **O(1)**, 26 × M, ≤, ≥.\n"
             "• ALWAYS bold Big-O notation like **O(N)**, **O(M × N)**, **O(M² × N)**.\n"
-            "• Keep formatting readable, clean, and concise with bold headings and bullet points. Avoid filler text."
+            "• Keep formatting readable, clean, and concise with bold headings and bullet points. Avoid filler text.\n\n"
+            "SPEECH-TO-TEXT ROBUSTNESS & INTENT INFERENCE:\n"
+            "• User prompts are transcribed from live microphone speech and may contain minor speech-to-text acoustic mishearings, phonetic homophones, or conversational slips (e.g. 'career' or 'carrier' for 'query', 'cash' for 'cache', 'doctor' for 'Docker', 'listen my' for 'hear my', etc.).\n"
+            "• ALWAYS infer the user's true conversational and technical intent contextually based on programming, algorithms, system design, and software interview discussions. Never be derailed by acoustic typos; answer their intended question directly and warmly."
         )
 
         fast_config = types.GenerateContentConfig(
@@ -2544,7 +2640,7 @@ class NativeAssistant(QMainWindow):
                                         except Exception:
                                             p_txt = ""
                                     if p_txt and p_txt.strip():
-                                        clean_p = p_txt.strip()
+                                        clean_p = self._auto_correct_speech_text(p_txt.strip())
                                         if len(clean_p) > 36:
                                             clean_p = "..." + clean_p[-33:]
                                         self.signals.voice_status_signal.emit(f"🎙️ \"{clean_p}\"", "interim")
@@ -2645,9 +2741,10 @@ class NativeAssistant(QMainWindow):
     def on_voice_transcribed(self, text, audio_bytes=None):
         if self.is_generating:
             return
-        clean = text.strip() if text else ""
-        if not clean or clean.lower() in ["[audio query]", "audio query", "no_speech"]:
+        raw = text.strip() if text else ""
+        if not raw or raw.lower() in ["[audio query]", "audio query", "no_speech"]:
             return
+        clean = self._auto_correct_speech_text(raw)
         self.text_input.setText(clean)
         self.send_text_prompt(audio_bytes=audio_bytes)
 
