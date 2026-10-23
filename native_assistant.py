@@ -817,6 +817,11 @@ class NativeAssistant(QMainWindow):
         self.current_mode = "manual"
         self.opacity_val = self.config.get("TRANSPARENCY", 65)
         self.conversation_history = []
+        self._last_auto_interim_text = ""
+        self._last_auto_interim_time = 0.0
+        self._last_generation_finish_time = 0.0
+        self._last_submitted_query_text = ""
+        self._last_submitted_query_time = 0.0
 
         # Smooth 45ms batch timer for streaming chunks (prevents flicker / glitches)
         self.stream_render_timer = QTimer(self)
@@ -1688,6 +1693,12 @@ class NativeAssistant(QMainWindow):
                 time.sleep(0.3)
                 continue
 
+            # Respect post-generation acoustic settling cooldown (0.8s) so room echo/reading silence doesn't trigger
+            now_t = time.time()
+            if (now_t - getattr(self, '_last_generation_finish_time', 0.0)) < 0.8:
+                time.sleep(0.15)
+                continue
+
             audio_src = self.config.get("AUDIO_SOURCE", "dual")
             mic_dev, loop_dev = self._get_wasapi_audio_devices()
 
@@ -1729,16 +1740,19 @@ class NativeAssistant(QMainWindow):
 
                     frames = []
                     has_speech = False
+                    speech_frames_count = 0
                     speech_start = None
                     silence_start = None
                     loop_start = time.time()
                     last_interim_time = 0
                     is_interim_working = False
+                    self._last_auto_interim_text = ""
+                    self._last_auto_interim_time = 0
 
-                    # Dynamic ambient calibration
+                    # Dynamic ambient calibration (~0.5s sample window)
                     calib_mic = []
                     calib_loop = []
-                    for _ in range(4):
+                    for _ in range(8):
                         if not self.is_auto_running or self.current_mode != "auto" or self.is_auto_listening_paused or self.is_generating:
                             break
                         if stream_loop:
@@ -1755,10 +1769,10 @@ class NativeAssistant(QMainWindow):
                             except Exception:
                                 pass
 
-                    ambient_mic = (sum(calib_mic) / len(calib_mic)) if calib_mic else 20.0
-                    ambient_loop = (sum(calib_loop) / len(calib_loop)) if calib_loop else 25.0
-                    thresh_mic = max(28.0, ambient_mic * 1.35)
-                    thresh_loop = max(40.0, ambient_loop * 1.35)
+                    ambient_mic = (sum(calib_mic) / len(calib_mic)) if calib_mic else 30.0
+                    ambient_loop = (sum(calib_loop) / len(calib_loop)) if calib_loop else 35.0
+                    thresh_mic = max(45.0, ambient_mic * 1.45)
+                    thresh_loop = max(50.0, ambient_loop * 1.45)
 
                     while self.is_auto_running and self.current_mode == "auto" and not self.is_auto_listening_paused and not self.is_generating:
                         m_16k = None
@@ -1787,7 +1801,7 @@ class NativeAssistant(QMainWindow):
                         is_loop_active = (rms_l >= thresh_loop) and (l_16k is not None)
 
                         # Software gain normalization for quiet human speech
-                        if m_16k and rms_m > 20:
+                        if m_16k and rms_m > 25:
                             gain_m = max(1.0, min(5.0, 4500.0 / max(rms_m, 1)))
                             if gain_m > 1.05:
                                 m_16k = sr.audioop.mul(m_16k, 2, gain_m)
@@ -1822,6 +1836,7 @@ class NativeAssistant(QMainWindow):
                                 speech_start = now
                                 self.auto_has_speech = True
                             silence_start = None
+                            speech_frames_count += 1
                             frames.append(mixed_16k)
                             self.auto_frames_count = len(frames)
                         else:
@@ -1841,10 +1856,10 @@ class NativeAssistant(QMainWindow):
                         # Instant user trigger via Space key or mic button
                         if getattr(self, 'auto_force_submit', False):
                             self.auto_force_submit = False
-                            if has_speech or len(frames) >= 4:
+                            if has_speech or speech_frames_count >= 3:
                                 break
 
-                        # Live interim analysis before speaking stops
+                        # Live interim analysis preview before speaking stops
                         if has_speech and (now - last_interim_time >= 0.6) and not is_interim_working and len(frames) >= 12:
                             last_interim_time = now
                             is_interim_working = True
@@ -1864,8 +1879,6 @@ class NativeAssistant(QMainWindow):
                                             p_txt = ""
                                     if p_txt and p_txt.strip():
                                         clean_p = self._auto_correct_speech_text(p_txt.strip())
-                                        self._last_auto_interim_text = clean_p
-                                        self._last_auto_interim_time = time.time()
                                         if len(clean_p) > 36:
                                             clean_p = "..." + clean_p[-33:]
                                         self.signals.voice_status_signal.emit(f"🎙️ \"{clean_p}\"", "interim")
@@ -1890,19 +1903,23 @@ class NativeAssistant(QMainWindow):
                         except Exception: pass
                     p.terminate()
 
-                    if frames and len(frames) > 5 and not self.is_generating and self.is_auto_running and not self.is_auto_listening_paused:
+                    # Only process if we actually recorded genuine speech activity (at least 8 active speech frames ~0.5s)
+                    if frames and speech_frames_count >= 8 and not self.is_generating and self.is_auto_running and not self.is_auto_listening_paused:
                         self.signals.voice_status_signal.emit("⚡ Submitting query...", "transcribing")
                         raw_data = b"".join(frames)
                         wav_bytes, data_16k = self._pcm_to_16k_wav(raw_data, 16000)
                         clean_text = self._transcribe_audio_buffer(data_16k, wav_bytes)
 
-                        # If full transcription was empty or missed, fallback to the latest real-time interim recognition
-                        if (not clean_text or len(clean_text) < 3) and hasattr(self, '_last_auto_interim_text') and self._last_auto_interim_text:
-                            clean_text = self._last_auto_interim_text
+                        # Reset interim state
+                        self._last_auto_interim_text = ""
+                        self._last_auto_interim_time = 0
 
                         if clean_text and len(clean_text.strip()) >= 2:
                             if self.is_auto_running and not self.is_auto_listening_paused and not self.is_generating:
                                 self.signals.voice_transcribed.emit(clean_text, wav_bytes)
+                    else:
+                        self._last_auto_interim_text = ""
+                        self._last_auto_interim_time = 0
 
                 except Exception as e:
                     print(f"Auto dual listener error: {e}")
@@ -2222,6 +2239,8 @@ class NativeAssistant(QMainWindow):
     def send_text_prompt(self, audio_bytes=None):
         if self.is_generating:
             return
+        self._last_auto_interim_text = ""
+        self._last_auto_interim_time = 0.0
         text = self.text_input.text().strip()
         if not text:
             return
@@ -2361,6 +2380,9 @@ class NativeAssistant(QMainWindow):
         self.stream_render_timer.stop()
         self._flush_stream_buffer()
         self.is_generating = False
+        self._last_generation_finish_time = time.time()
+        self._last_auto_interim_text = ""
+        self._last_auto_interim_time = 0.0
         self.status_pill.hide()
         if self.current_ai_bubble:
             self.current_ai_bubble.show_action_chips()
@@ -2683,6 +2705,19 @@ class NativeAssistant(QMainWindow):
         if not raw or raw.lower() in ["[audio query]", "audio query", "no_speech"]:
             return
         clean = self._auto_correct_speech_text(raw)
+        if not clean or len(clean.strip()) < 2:
+            return
+
+        # Deduplication protection: suppress duplicate or partial ghost queries within 15 seconds
+        now = time.time()
+        last_txt = getattr(self, '_last_submitted_query_text', '')
+        last_time = getattr(self, '_last_submitted_query_time', 0.0)
+        if last_txt and (clean.lower() == last_txt.lower() or (len(clean) > 20 and clean.lower() in last_txt.lower())) and (now - last_time < 15.0):
+            print(f"[AutoListener] Suppressed duplicate ghost query within 15s: {clean[:40]}...")
+            return
+        self._last_submitted_query_text = clean
+        self._last_submitted_query_time = now
+
         self.text_input.setText(clean)
         self.send_text_prompt(audio_bytes=audio_bytes)
 
